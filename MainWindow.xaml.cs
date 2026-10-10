@@ -1659,25 +1659,69 @@ public partial class MainWindow : Window
         foreach (var line in (r.All ?? "").Split('\n'))
             if (line.Trim().Length > 0) Log("  " + line.TrimEnd('\r'), TxtImageLog);
 
-        // exit=0 不代表删掉了：被容器引用时 wslc 只「取消标记」，必须看输出里有没有「已删除」行。
+        // exit=0 不代表删掉了：wslc 可能只「取消标记」，必须看输出里有没有「已删除」行。
         switch (WslcService.InterpretImageRemove(r.Success, r.All))
         {
             case WslcService.ImageRemoveOutcome.Deleted:
-                SetStatus($"已删除镜像 {img.Reference}（镜像层已回收）", "OkBrush");
+                SetStatus($"已删除镜像 {img.Reference}（镜像层已删除）", "OkBrush");
                 break;
 
             case WslcService.ImageRemoveOutcome.UntaggedOnly:
-                SetStatus($"仅移除了标签：{img.Reference} 仍被容器占用，镜像层未删除、空间未释放", "WarnBrush");
-                Log("  注意：上面没有「已删除」行 —— wslc 只取消了标记，" +
-                    "镜像层还在（被容器按住），磁盘空间没有回收。", TxtImageLog);
+            {
+                // ⚠ 不能一口咬定"被容器按住" —— 得实际查引用关系再说。
+                // （2026-10-10 用户实测：当时一个容器都没有，却提示"被容器按住"）
+                var holders = _containers
+                    .Where(x => ImageRefMatches(x.Image, img.Reference))
+                    .Select(x => x.Name)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Distinct()
+                    .ToList();
+
+                if (holders.Count > 0)
+                {
+                    SetStatus($"只移除了标签：{img.Reference} 仍被 {holders.Count} 个容器引用", "WarnBrush");
+                    Log($"  注意：没有「已删除」行，该镜像仍被容器引用 —— " +
+                        $"先删掉这些容器才能回收：{string.Join("、", holders.Take(6))}" +
+                        (holders.Count > 6 ? $" 等 {holders.Count} 个" : ""), TxtImageLog);
+                }
+                else
+                {
+                    SetStatus($"只移除了标签：{img.Reference} 的镜像层仍在", "WarnBrush");
+                    Log("  注意：没有「已删除」行，但当前**没有容器引用它**。可能是该层仍被其它" +
+                        "镜像当作父层共享，或 wslc 这次只做了取消标记。", TxtImageLog);
+                }
                 break;
+            }
 
             default:
                 SetStatus("删除失败：" + One(r.All), "ErrBrush");
                 break;
         }
 
+        // 无论层删没删，虚拟磁盘都不会自动缩小 —— 这才是"空间没回收"的常见原因，必须讲清楚。
+        Log("  说明：镜像层删掉后，虚拟磁盘 storage.vhdx **不会自动缩小**，" +
+            "在「资源管理器」里看文件大小仍不变（实测：删掉 163MB 的 nginx 后磁盘占用 +0.0 MB）。" +
+            "要真正释放，需让 WSL 压缩该虚拟磁盘。", TxtImageLog);
+
         await RefreshImagesAsync(silent: true);
+    }
+
+    /// <summary>容器记录的镜像引用与待删镜像是否为同一个（容忍有无 tag、前缀差异）。</summary>
+    private static bool ImageRefMatches(string containerImage, string reference)
+    {
+        if (string.IsNullOrWhiteSpace(containerImage) || string.IsNullOrWhiteSpace(reference)) return false;
+
+        var a = containerImage.Trim();
+        var b = reference.Trim();
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+
+        static string NoTag(string s)
+        {
+            var i = s.LastIndexOf(':');
+            var j = s.LastIndexOf('/');
+            return i > j ? s.Substring(0, i) : s;   // 只去掉 tag，保留 registry 端口里的冒号
+        }
+        return string.Equals(NoTag(a), NoTag(b), StringComparison.OrdinalIgnoreCase);
     }
 
     private void OnImageRunClick(object sender, RoutedEventArgs e)
