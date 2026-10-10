@@ -1,0 +1,18 @@
+# 构建产物
+bin/
+obj/
+release/
+_probe/bin/
+_probe/obj/
+
+# 开发期产物（截图 / 探针回报 / 派生预览图）
+_shots/
+_verify/
+probe_result.txt
+*.err.txt
+_tools/*_preview*.png
+
+# IDE / 用户本地文件
+*.user
+*.suo
+.vs/

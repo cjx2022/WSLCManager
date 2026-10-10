@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- 仅用于系统托盘 NotifyIcon（WPF 无内置托盘 API） -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>WSLCManager</AssemblyName>
+    <RootNamespace>WSLCManager</RootNamespace>
+    <AssemblyTitle>WSLC 容器管理器</AssemblyTitle>
+    <Product>WSLC Manager</Product>
+    <Description>WSL 容器（wslc）可视化管理器：环境安装、镜像加速与管理、容器可视化新建与生命周期管理、性能监控</Description>
+    <!-- 著作权与许可：本仓库以 MIT 发布，著作权归 billchen（见 LICENSE）。
+         这里只写作者、不写组织 —— 这是一个独立工具，与微软及任何镜像服务商均无隶属关系
+         （设置里预置的几个加速地址只是第三方公开站点，不构成隶属或背书）。 -->
+    <Company>billchen</Company>
+    <Authors>billchen</Authors>
+    <Copyright>Copyright (c) 2026 billchen</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/cjx2022/WSLCManager</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Version>0.9.0</Version>
+    <AssemblyVersion>0.9.0.0</AssemblyVersion>
+    <FileVersion>0.9.0.0</FileVersion>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- WFAC010：WinForms 分析器建议用 ApplicationHighDpiMode 取代 manifest，
+         但那是 WinForms 的机制；WPF 只认 manifest 里的 PerMonitorV2，故忽略该建议。 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 命令行输出可能回退到 GBK 解码（wsl/wslc 中文输出） -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms 会让 SDK 自动 global using System.Windows.Forms，
+         这与 WPF 的 Application / TextBox / KeyEventArgs 等类型全面冲突，移除之；
+         TrayIcon.cs 里按需显式 using。 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 应用内 logo（去底透明 PNG），以 pack URI 方式加载；
+         app.ico 也作为资源嵌入，供托盘图标兜底加载 -->
+    <Resource Include="Assets\logo.png" />
+    <Resource Include="app.ico" />
+  </ItemGroup>
+
+  <!-- 辅助目录不参与主程序编译 -->
+  <ItemGroup>
+    <Compile Remove="_probe\**" />
+    <None Remove="_probe\**" />
+    <Page Remove="_probe\**" />
+    <Compile Remove="_tools\**" />
+    <None Remove="_tools\**" />
+    <Page Remove="_tools\**" />
+  </ItemGroup>
+
+</Project>
