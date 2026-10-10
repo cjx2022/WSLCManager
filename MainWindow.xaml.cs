@@ -1619,6 +1619,70 @@ public partial class MainWindow : Window
             okCount > 0 ? "OkBrush" : "WarnBrush");
     }
 
+    /// <summary>
+    /// 压缩 wslc 会话的虚拟磁盘（storage.vhdx）。
+    /// 背景：删除镜像后 vhdx 只增不减（实测删 163MB 的 nginx 后磁盘 +0.0 MB），
+    /// 需要手动 compact 才能真正回收。流程：警告 → 关 WSL → 提权 diskpart → 报告前后大小。
+    /// </summary>
+    private async void OnCompactDiskClick(object sender, RoutedEventArgs e)
+    {
+        var vhdx = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
+        if (vhdx == null) { SetStatus("未找到 wslc 会话的虚拟磁盘", "WarnBrush"); return; }
+
+        var before = WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(vhdx);
+        var msg = "将对 wslc 会话的虚拟磁盘执行 diskpart compact：\n\n" + vhdx +
+                  $"\n\n当前大小：{before / 1048576.0:N1} MB" +
+                  "\n\n⚠ 流程：wsl --shutdown（所有 WSL / wslc 容器会停止）→ UAC 提权 → diskpart compact。" +
+                  "\n\n⚠ 实测提醒（2026-10-10）：ext4 删除文件不清零，compact 只回收全零块，" +
+                  "**对 wslc 会话的磁盘通常回收 0 字节**（fstrim 的 TRIM 也不传导）。" +
+                  "此功能保留给确有需要的场景（如磁盘内做过全盘写零）。\n\n确定继续吗？";
+
+        if (!AppDialog.Confirm(this, "压缩虚拟磁盘", msg, okText: "开始压缩", danger: false)) return;
+
+        if (_busy) { SetStatus("已有任务在执行，请稍候", "WarnBrush"); return; }
+        SetBusy(true, "正在压缩虚拟磁盘…");
+        BtnCompact.IsEnabled = false;
+
+        // 1) 关闭 WSL（含 wslc 会话），否则 vhdx 被占用无法压缩
+        SetStatus("正在关闭 WSL…", "WarnBrush");
+        var (ok, outText) = await System.Threading.Tasks.Task.Run(
+            () => WSLCManager.Helpers.DiskCompactor.ShutdownWsl());
+        if (!ok)
+        {
+            SetBusy(false); BtnCompact.IsEnabled = true;
+            SetStatus("关闭 WSL 失败：" + outText, "ErrBrush");
+            return;
+        }
+        await System.Threading.Tasks.Task.Delay(1500);   // 留时间让句柄完全释放
+
+        // 2) 提权 diskpart（UAC 由用户确认）
+        SetStatus("等待 UAC 授权（如未弹出请检查任务栏）…", "WarnBrush");
+        var r = await System.Threading.Tasks.Task.Run(
+            () => WSLCManager.Helpers.DiskCompactor.Compact(vhdx));
+
+        // 3) 报告
+        var after = WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(vhdx);
+        var saved = (before - after) / 1048576.0;
+        Log($"── 压缩虚拟磁盘 ──", TxtImageLog);
+        Log($"磁盘：{vhdx}", TxtImageLog);
+        Log($"压缩前：{before / 1048576.0:N1} MB　压缩后：{after / 1048576.0:N1} MB　" +
+            $"释放：{(saved > 0 ? saved.ToString("N1") + " MB" : "0 MB（无碎片可回收）")}", TxtImageLog);
+        if (!string.IsNullOrWhiteSpace(r.Output))
+            foreach (var l in r.Output.Split('\n'))
+                if (l.Trim().Length > 0 && !l.Contains("Microsoft") && !l.Contains("版权"))
+                    Log("  " + l.TrimEnd('\r'), TxtImageLog);
+
+        SetBusy(false);
+        BtnCompact.IsEnabled = true;
+
+        if (r.Ok && saved > 0.05)
+            SetStatus($"压缩完成，释放 {saved:N1} MB", "OkBrush");
+        else if (r.Ok)
+            SetStatus("压缩完成，但本磁盘没有可回收的碎片空间", "InfoBrush");
+        else
+            SetStatus("压缩失败：" + r.Error, "ErrBrush");
+    }
+
     private void OnOpenWslcSettingsClick(object sender, RoutedEventArgs e)
     {
         try

@@ -754,6 +754,10 @@
                                                 Click="OnTestMirrorsClick"/>
                                         <Button Style="{StaticResource ToolButton}" Margin="0"
                                                 Content="打开 wslc 设置文件" Click="OnOpenWslcSettingsClick"/>
+                                        <Button Style="{StaticResource ToolButton}" Margin="8,0,0,0"
+                                                Content="压缩虚拟磁盘" x:Name="BtnCompact"
+                                                ToolTip="对 wslc 会话的 storage.vhdx 执行 diskpart compact。⚠ 实测对 wslc 会话通常回收 0 字节（ext4 删除不清零，TRIM 不传导），仅对确有零块的磁盘有效。会关闭 WSL 并弹 UAC。"
+                                                Click="OnCompactDiskClick"/>
                                     </StackPanel>
                                     <TextBlock x:Name="TxtMirrorTest" FontSize="12" Margin="0,8,0,0"
                                                TextWrapping="Wrap" LineHeight="19"
