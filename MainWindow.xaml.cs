@@ -1440,6 +1440,13 @@ public partial class MainWindow : Window
         Log(r.Success ? "容器创建指令已执行（退出码 0）。" : $"创建失败（退出码 {r.ExitCode}）。", TxtContainerLog);
         foreach (var line in TableParser.Lines(r.All)) Log(line, TxtContainerLog);
 
+        // ⚠ 导入的备份镜像（image import）没有默认启动命令，不带命令 run 会报 no command specified
+        if (!r.Success && (r.All ?? "").Contains("no command specified", StringComparison.OrdinalIgnoreCase))
+        {
+            Log("  诊断：该镜像没有默认启动命令（常见于「备份与清理」导入的镜像 —— 导出只含文件系统）。", TxtContainerLog);
+            Log("  解决：重新新建容器，并在「启动命令」里填一个常驻命令，例如 sleep infinity 或 sh。", TxtContainerLog);
+        }
+
         if (r.Success && DiedRightAfterStart(st))
         {
             Log(ExplainImmediateExit(!string.IsNullOrWhiteSpace(spec.Name) ? spec.Name : "新容器", st), TxtContainerLog);
@@ -1802,7 +1809,7 @@ public partial class MainWindow : Window
 
         Log($"执行：wslc container export -o \"{dlg.FileName}\" {name}", TxtImageLog);
 
-        var r = await WslcService.ExportContainerAsync(name, dlg.FileName);
+        var r = await WslcService.ExportContainerWithMetaAsync(name, dlg.FileName);
 
         // 导出完把原来运行中的容器拉起来
         if (wasRunning && r.Success)
@@ -1817,7 +1824,10 @@ public partial class MainWindow : Window
         if (r.Success)
         {
             var size = File.Exists(dlg.FileName) ? new FileInfo(dlg.FileName).Length : 0;
-            Log($"备份完成：{dlg.FileName}（{size / 1048576.0:N1} MB）", TxtImageLog);
+            var hasMeta = File.Exists(dlg.FileName + ".json");
+            Log($"备份完成：{dlg.FileName}（{size / 1048576.0:N1} MB）" +
+                (hasMeta ? " + 配置元数据（恢复时将按原配置自动重建容器）" : "（⚠ 未取得配置元数据，恢复时只能恢复为镜像）"),
+                TxtImageLog);
             SetStatus($"已备份容器 {name}", "OkBrush");
         }
         else
@@ -1858,19 +1868,137 @@ public partial class MainWindow : Window
         Log($"执行：wslc image import \"{file}\" {imageName}", TxtImageLog);
 
         var r = await WslcService.ImportImageAsync(file, imageName);
-        SetBusy(false);
-
-        if (r.Success)
+        if (!r.Success)
         {
-            Log($"导入完成：镜像 {imageName} 已就绪。到「镜像管理」页选中它并点「用选中镜像新建容器」即可重建容器。", TxtImageLog);
-            SetStatus($"已导入镜像 {imageName}", "OkBrush");
-            await RefreshImagesAsync(silent: true);
-        }
-        else
-        {
+            SetBusy(false);
             Log("导入失败：" + One(r.StdErr), TxtImageLog);
             SetStatus("导入失败", "ErrBrush");
+            return;
         }
+
+        Log($"导入完成：镜像 {imageName} 已就绪。", TxtImageLog);
+
+        // 备份时随附的配置元数据（<tar>.json）：有它就能按原配置直接重建容器
+        string meta = null;
+        var jsonPath = file + ".json";
+        if (File.Exists(jsonPath))
+        {
+            try { meta = File.ReadAllText(jsonPath); }
+            catch { Log("读取配置元数据失败（" + jsonPath + "），只能恢复为镜像。", TxtImageLog); }
+        }
+
+        if (meta == null)
+        {
+            SetBusy(false);
+            Log("  ⚠ 未找到配置元数据（" + jsonPath + "）—— 仅恢复为镜像。", TxtImageLog);
+            Log("  新建容器时必须在「启动命令」里填一个常驻命令（例如 sleep infinity 或 sh），" +
+                "否则会报 no command specified。", TxtImageLog);
+            SetStatus($"已导入镜像 {imageName}（未按原配置重建）", "WarnBrush");
+            await RefreshImagesAsync(silent: true);
+            return;
+        }
+
+        // 按原配置重建容器：名称 / 启动命令 / 端口映射 / 环境变量 / 重启策略
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(meta);
+            var root = doc.RootElement;
+
+            var spec = new ContainerSpec { Image = imageName, Detach = true };
+
+            string origName = null;
+            if (root.TryGetProperty("Name", out var nEl))
+                origName = (nEl.GetString() ?? "").TrimStart('/');
+            if (string.IsNullOrWhiteSpace(origName))
+                origName = imageName.Split(':')[0].Split('/').Last() + "-restored";
+            if (_containers.Any(x => x.Name == origName))
+                origName = origName + "-restored";
+            spec.Name = origName;
+
+            var cmdSb = new System.Text.StringBuilder();
+            if (root.TryGetProperty("Config", out var cfg))
+            {
+                if (cfg.TryGetProperty("Cmd", out var cmdEl) && cmdEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var t in cmdEl.EnumerateArray())
+                    {
+                        var tok = t.GetString() ?? "";
+                        if (tok.Length == 0) continue;
+                        if (cmdSb.Length > 0) cmdSb.Append(' ');
+                        if (tok.Contains(' ') || tok.Contains('"'))
+                            cmdSb.Append('"').Append(tok.Replace("\"", "\\\"")).Append('"');
+                        else cmdSb.Append(tok);
+                    }
+                }
+                if (cfg.TryGetProperty("Env", out var envEl) && envEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var e2 in envEl.EnumerateArray())
+                    {
+                        var kv = e2.GetString() ?? "";
+                        var i = kv.IndexOf('=');
+                        if (i > 0)
+                            spec.Env.Add(new ContainerSpec.EnvVar { Key = kv[..i], Value = kv[(i + 1)..] });
+                    }
+                }
+            }
+            spec.Command = cmdSb.ToString();
+
+            // ⚠ wslc run 没有 --restart 选项（2026-10-10 实测报「选项名称未被识别」），
+            //   所以元数据里的重启策略只能记录、不能下发 —— 恢复后需手动处理。
+            if (root.TryGetProperty("HostConfig", out var hc))
+            {
+                if (hc.TryGetProperty("PortBindings", out var pb) && pb.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var kp in pb.EnumerateObject())
+                    {
+                        var cp = kp.Name.Split('/')[0];
+                        var proto = kp.Name.EndsWith("/udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "";
+                        foreach (var b in kp.Value.EnumerateArray())
+                        {
+                            var host = b.TryGetProperty("HostPort", out var hp) ? (hp.GetString() ?? "") : "";
+                            spec.Ports.Add(new ContainerSpec.PortMap
+                            { HostPort = host, ContainerPort = cp, Protocol = proto });
+                            break;
+                        }
+                    }
+                }
+                if (hc.TryGetProperty("RestartPolicy", out var rpEl) &&
+                    rpEl.TryGetProperty("Name", out var nmEl))
+                {
+                    var rp = nmEl.GetString() ?? "";
+                    // wslc run 无 --restart 选项，只记录不下发
+                    if (rp.Length > 0 && rp != "no")
+                        Log($"  ⚠ 原容器重启策略为 {rp}，但 wslc run 暂不支持 --restart，恢复后未应用（容器不会开机自启）。", TxtImageLog);
+                    spec.RestartPolicy = rp;
+                }
+            }
+
+            Log($"按原配置重建容器 {spec.Name}：命令「{spec.Command}」、" +
+                $"端口 {spec.Ports.Count} 条、环境变量 {spec.Env.Count} 条" +
+                (spec.RestartPolicy.Length > 0 ? $"、重启策略 {spec.RestartPolicy}" : ""), TxtImageLog);
+
+            var run = await WslcService.RunAsync(spec, s2 => Log(s2, TxtImageLog));
+            if (run.Success)
+            {
+                Log($"✓ 容器 {spec.Name} 已按原配置恢复。", TxtImageLog);
+                SetStatus($"已恢复容器 {spec.Name}", "OkBrush");
+            }
+            else
+            {
+                Log("按原配置重建容器失败：" + One(run.StdErr), TxtImageLog);
+                Log("镜像已导入，可到「镜像管理」页手动新建（记得填启动命令）。", TxtImageLog);
+                SetStatus("镜像已导入，但容器重建失败", "WarnBrush");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("解析备份元数据失败，仅恢复为镜像：" + ex.Message, TxtImageLog);
+            SetStatus($"已导入镜像 {imageName}（未按原配置重建）", "WarnBrush");
+        }
+
+        SetBusy(false);
+        await RefreshImagesAsync(silent: true);
+        RefreshBackupContainers();
     }
 
     /// <summary>

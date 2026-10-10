@@ -832,7 +832,7 @@
                                     <TextBlock Text="备份容器" Style="{StaticResource SectionTitle}"/>
                                     <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
                                                Foreground="{DynamicResource SubTextBrush}"
-                                               Text="把容器的文件系统导出为 tar 存档（wslc container export）。⚠ wslc 要求导出时容器必须处于停止状态 —— 工具会自动处理：先停止，导出完成后自动恢复运行。"/>
+                                               Text="把容器导出为 tar 存档 + 配置元数据（wslc container export + inspect）。恢复时会按原配置（名称/启动命令/端口/环境变量）自动重建容器。⚠ wslc 要求导出时容器必须停止 —— 工具会自动处理：先停止，导出完成后恢复运行。"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -851,7 +851,7 @@
                                     <TextBlock Text="恢复容器" Style="{StaticResource SectionTitle}"/>
                                     <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
                                                Foreground="{DynamicResource SubTextBrush}"
-                                               Text="把备份的 tar 导入为镜像（wslc image import）。导入完成后，到「镜像管理」页选中它并点「用选中镜像新建容器」即可重建容器；端口与环境变量需在新建时重新填写。"/>
+                                               Text="选择备份 tar 并点「导入」：工具会读取随附的配置元数据，导入镜像后**自动按原配置重建容器**（名称/启动命令/端口/环境变量）。没有元数据的旧备份则只恢复为镜像。"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>

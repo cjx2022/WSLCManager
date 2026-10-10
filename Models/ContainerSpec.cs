@@ -62,7 +62,9 @@ public sealed class ContainerSpec
         if (Tty) a.Add("-t");
         if (PublishAll) a.Add("-P");
         if (!string.IsNullOrWhiteSpace(Name)) { a.Add("--name"); a.Add(Name.Trim()); }
-        if (!string.IsNullOrWhiteSpace(RestartPolicy)) { a.Add("--restart"); a.Add(RestartPolicy.Trim()); }
+        // ⚠ 不输出 --restart：wslc run 没有该选项（2026-10-10 实测报
+        //   「选项名称未被识别：'--restart'」），填了会导致创建失败。
+        //   字段保留用于界面展示与备份元数据，但不下发。
         if (!string.IsNullOrWhiteSpace(WorkingDir)) { a.Add("-w"); a.Add(WorkingDir.Trim()); }
         if (!string.IsNullOrWhiteSpace(HostName)) { a.Add("-h"); a.Add(HostName.Trim()); }
         if (!string.IsNullOrWhiteSpace(EntrypointOverride)) { a.Add("--entrypoint"); a.Add(EntrypointOverride.Trim()); }

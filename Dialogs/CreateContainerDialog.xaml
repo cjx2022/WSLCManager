@@ -96,7 +96,8 @@
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <TextBlock Text="启动命令（可留空，用镜像默认）" Style="{StaticResource FieldLabel}"/>
-                            <TextBox x:Name="TxtCommand" Style="{StaticResource RowBox}" TextChanged="OnAnyChanged"/>
+                            <TextBox x:Name="TxtCommand" Style="{StaticResource RowBox}" TextChanged="OnAnyChanged"
+                                     ToolTip="留空 = 用镜像自带的默认命令。⚠ 通过「备份与清理」导入的镜像没有默认命令，必须在这里填一个常驻命令（例如 sleep infinity 或 sh），否则容器无法启动。"/>
                         </StackPanel>
                     </Grid>
 
@@ -248,7 +249,8 @@
                                     <TextBlock Text="重启策略（always / on-failure / unless-stopped）"
                                                Style="{StaticResource FieldLabel}"/>
                                     <TextBox x:Name="TxtRestart" Style="{StaticResource RowBox}"
-                                             TextChanged="OnAnyChanged"/>
+                                             TextChanged="OnAnyChanged"
+                                             ToolTip="⚠ wslc run 暂不支持 --restart 选项（2026-10-10 实测），填写也不会下发。"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
                                     <TextBlock Text="工作目录 (-w)" Style="{StaticResource FieldLabel}"/>

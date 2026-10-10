@@ -487,6 +487,37 @@ public static class WslcService
         return ProcRunner.Run(ExePath, new[] { "system", "session", "list" }, timeoutMs);
     }
 
+    /// <summary>
+    /// 导出容器文件系统为 tar，并随附配置元数据（inspect 的 JSON 原文）。
+    /// tar 只有文件系统（容器名/命令/端口/环境变量都不在里面），恢复时需要这份
+    /// 元数据才能按原配置重建容器 —— 没有它就只能恢复成镜像、让用户手动填命令。
+    /// 元数据写到 &lt;tarPath&gt;.json。
+    /// </summary>
+    public static async Task<RunResult> ExportContainerWithMetaAsync(string container,
+        string outputFile, CancellationToken ct = default)
+    {
+        var tar = await ExportContainerAsync(container, outputFile, ct);
+        if (!tar.Success) return tar;
+
+        try
+        {
+            var ins = await InspectAsync(container, ct);
+            var txt = ins.All ?? "";
+            var s = txt.IndexOf('{');
+            var e = txt.LastIndexOf('}');
+            if (s >= 0 && e > s)
+            {
+                var json = txt.Substring(s, e - s + 1);
+                // 验证是合法 JSON 再落盘，避免把表格输出误存进去
+                System.Text.Json.JsonDocument.Parse(json);
+                File.WriteAllText(outputFile + ".json", json, new System.Text.UTF8Encoding(false));
+            }
+        }
+        catch { /* inspect/写元数据失败不阻塞导出本身，恢复时按无元数据处理 */ }
+
+        return tar;
+    }
+
     // ── 镜像占用对账 / 删除结果解读 ───────────────────────────────
 
     /// <summary>

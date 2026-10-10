@@ -1,17 +1,24 @@
-feat: 清理页如实区分「运行时底座」与「可释放空间」
+feat: 备份恢复升级为「按原配置自动重建容器」
 
-用户问：重建完成后新磁盘为什么还占 588MB？
+此前恢复只到镜像（import 后需手动新建容器），而 container export 的
+tar 只有文件系统、不含容器名/命令/端口/环境变量 —— 用户手动新建时
+不知道要填什么，且导入镜像没有默认命令，不带命令 run 会报
+「no command specified」。
 
-实测解答：挂载重建后的 vhdx 检查，内部实际数据仅约 350KB
-（buildkit/containerd/网络配置等引擎目录），df 已用仅 2.4M；
-其余约 588MB 是 ext4 日志区/块分配表等格式化结构 —— 对 1TB 虚拟
-容量的盘这是「运行时底座」，空会话必然存在，重建/压缩都消不掉。
+实现：
+- 导出时随附配置元数据：<tar>.json（wslc inspect 原文，含
+  Name/Config.Cmd/Config.Env/HostConfig.PortBindings/RestartPolicy）
+- 恢复时自动读取：import 后按原配置 run —— 原容器名（冲突自动加
+  -restored 后缀）、启动命令（Cmd 数组按 shell 引号规则 join 保真，
+  SplitCommand 可解回）、端口映射（PortBindings -> -p）、环境变量
+  （Config.Env -> -e）
+- 无元数据的旧备份退回原行为（仅恢复为镜像 + 明确提醒填命令）
+- 新建容器失败诊断：报 no command specified 时给出中文指引
 
-所以重建不是没效果：825MB -> 588MB 实际已释放 237MB。
-能释放的始终是「当前占用 - 588MB 底座」。
+顺带发现并处理的 wslc 能力边界（2026-10-10 实测）：
+- wslc run 没有 --restart 选项（报「选项名称未被识别」）——
+  ToArgs 不再下发 RestartPolicy，恢复时只记录并提示手动处理，
+  新建对话框的重启策略输入框加同样的提醒
 
-UI 相应调整（常量 DiskCompactor.EmptySessionBaseMB = 588）：
-- 磁盘占用行：显示占用值 + 判定（可释放约 X MB / 已接近底座重建
-  收益有限）
-- 重建确认框：预估释放量改为扣除底座后的净收益，低于阈值时如实
-  提示「重建收益有限」
+端到端实测：起容器（-p 18080:80 -e FOO=bar -e APP=xyz）-> 备份 ->
+清场（删容器删镜像）-> 恢复 -> 容器 running、原名称、env 全部保真。
