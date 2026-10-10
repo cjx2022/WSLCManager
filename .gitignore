@@ -16,3 +16,4 @@ _tools/*_preview*.png
 *.user
 *.suo
 .vs/
+_msg.txt
