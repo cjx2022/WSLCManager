@@ -1892,41 +1892,46 @@ public partial class MainWindow : Window
 
         SetBusy(true, "正在重建会话…");
 
-        // 1) 查会话 ID（表格第一列）
-        var lst = await System.Threading.Tasks.Task.Run(() => WslcService.ListSessions());
-        var sessionId = TableParser.Lines(lst.All)
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0 && char.IsDigit(l[0]))
-            .Select(l => l.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0])
-            .FirstOrDefault();
+        // 1) 终止会话（terminate 不接受位置参数，不带参数即终止默认会话）
+        var tr = await System.Threading.Tasks.Task.Run(() => WslcService.TerminateSessionAsync());
+        Log($"已终止会话（exit={tr.ExitCode}）", TxtImageLog);
 
-        // 2) 终止会话（释放 vhdx 占用）
-        if (sessionId != null)
-        {
-            var tr = await WslcService.TerminateSessionAsync(sessionId);
-            Log($"已终止会话 {sessionId}（exit={tr.ExitCode}）", TxtImageLog);
-        }
-        else
-        {
-            Log("未找到活动会话（可能已经终止）", TxtImageLog);
-        }
+        // 2) ⚠ 必须关闭 WSL：wslc 的 vhdx 由 WSL2 VM 挂载，只 terminate 会话的话
+        //    VM 仍占着 storage.vhdx / swap.vhdx 的句柄，下一步删目录必然失败
+        //    （2026-10-10 实测：terminate 后删除报"会话目录删除失败"，补 shutdown 后成功）。
+        var sd = await System.Threading.Tasks.Task.Run(
+            () => WSLCManager.Helpers.DiskCompactor.ShutdownWsl());
+        Log($"已执行 wsl --shutdown（exit={(sd.Ok ? "0" : "失败")}）", TxtImageLog);
+        await System.Threading.Tasks.Task.Delay(1500);   // 留时间让句柄完全释放
 
-        // 3) 删除会话目录（虚拟磁盘与全部数据）
+        // 3) 删除会话目录（虚拟磁盘与全部数据），带重试 —— 句柄释放可能有延迟
         var dir = WslcService.GetStorageDir();
         if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
         {
-            try
+            bool deleted = false;
+            string lastErr = "";
+            for (int attempt = 1; attempt <= 3 && !deleted; attempt++)
             {
-                Directory.Delete(dir, true);
-                Log($"已删除会话目录：{dir}", TxtImageLog);
+                try
+                {
+                    Directory.Delete(dir, true);
+                    deleted = true;
+                }
+                catch (Exception ex)
+                {
+                    lastErr = ex.Message;
+                    Log($"删除会话目录第 {attempt} 次失败（{ex.GetType().Name}），2 秒后重试…", TxtImageLog);
+                    await System.Threading.Tasks.Task.Delay(2000);
+                }
             }
-            catch (Exception ex)
+            if (!deleted)
             {
-                Log("删除会话目录失败：" + ex.Message, TxtImageLog);
+                Log("删除会话目录失败：" + lastErr, TxtImageLog);
                 SetBusy(false);
-                SetStatus("重建失败：会话目录删除失败", "ErrBrush");
+                SetStatus("重建失败：会话目录删除失败（可手动删除后重试：" + dir + "）", "ErrBrush");
                 return;
             }
+            Log($"已删除会话目录：{dir}", TxtImageLog);
         }
 
         // 4) 触发 wslc 重建空会话（任意命令都会自动建）

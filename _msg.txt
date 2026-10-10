@@ -1,12 +1,19 @@
-fix: 清理页显示虚拟磁盘占用 + 修复卡死与 vhdx 选择溢出
+fix: 重建会话「删除会话目录失败」—— 补 wsl --shutdown 与重试
 
-- 清理-重建会话卡片自动显示当前虚拟磁盘路径与占用大小（进入页面/
-  重建完成后自动刷新），确认框同步带上「重建后将释放 X MB」
-- ⚠ 修复应用卡死：RefreshSessionDiskInfo / OnRebuildSessionClick /
-  OnCompactDiskClick 在 UI 线程直接调 FindStorageVhdx -> GetStorageDir，
-  首次会同步跑 wslc info（最长 20s 超时）导致界面冻结 —— 全部改为
-  Task.Run 后台执行（这是 GetStorageDir 缓存修复后残留的首次调用卡点）
-- ⚠ 修复 vhdx 误选：FindStorageVhdx 用「长度 + long.MaxValue」给
-  storage.vhdx 加优先分，结果整数溢出为负，36MB 的 swap.vhdx 反而
-  赢了 825MB 的 storage.vhdx —— 改为先按名称找 storage、找不到再取
-  最大文件
+用户实测报错：重建失败-会话目录删除失败。
+
+根因（2026-10-10 实测定位）：
+1. terminate 的正确用法是无位置参数（传会话 ID 会报「未预期的位置
+   参数」，不带参数即终止默认会话）—— 原代码传了 ID，实际没终止成功
+2. 关键遗漏：终止会话后 **WSL2 VM 仍挂着 storage.vhdx / swap.vhdx
+   的句柄**，目录删除必然失败 —— 必须补 wsl --shutdown
+   （实测：terminate + shutdown 后逐文件删除全部成功）
+
+修复：
+- terminate 改为无参调用（WslcService.TerminateSessionAsync）
+- 终止后补 wsl --shutdown（复用 DiskCompactor.ShutdownWsl）
+- 目录删除带 3 次重试（每次间隔 2s，容句柄延迟释放）
+- 删除失败时提示可手动删除的完整路径
+
+全流程实测：terminate -> shutdown -> 删目录成功 -> 任意 wslc 命令
+自动重建空会话（新 storage.vhdx，0 镜像 0 容器）。

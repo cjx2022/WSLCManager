@@ -468,14 +468,16 @@ public static class WslcService
         }, ct);
 
     /// <summary>
-    /// 终止 wslc 会话（wslc system session terminate &lt;id&gt;）。
-    /// 注意：子命令是 system 下的 session，terminate 不叫 stop。
+    /// 终止活动会话（wslc system session terminate）。
+    /// ⚠ 实测 terminate **不接受位置参数**（传会话 ID 会报"未预期的位置参数"），
+    /// 不带参数时终止默认会话；指定会话用全局选项 --session。
+    /// ⚠ 终止会话后 WSL2 VM 仍可能挂着 vhdx，删除会话目录前必须再执行 wsl --shutdown。
     /// </summary>
-    public static Task<RunResult> TerminateSessionAsync(string sessionId, CancellationToken ct = default)
+    public static Task<RunResult> TerminateSessionAsync(CancellationToken ct = default)
         => Task.Run(() =>
         {
             if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
-            return ProcRunner.Run(ExePath, new[] { "system", "session", "terminate", sessionId }, 60000, ct);
+            return ProcRunner.Run(ExePath, new[] { "system", "session", "terminate" }, 60000, ct);
         }, ct);
 
     /// <summary>列出会话（wslc system session list，表格输出）。</summary>
