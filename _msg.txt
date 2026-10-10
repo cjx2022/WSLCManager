@@ -1,18 +1,12 @@
-feat: 新增「备份与清理」页 + 修正镜像删除按钮与提示
+fix: 清理页显示虚拟磁盘占用 + 修复卡死与 vhdx 选择溢出
 
-镜像删除（用户反馈两点）：
-- 被容器占用的镜像不再提供删除：删除按钮禁用并说明原因
-  （键盘路径兜底同样拦截）；未被占用的才可删
-- 未占用镜像的确认文案改为如实描述：在虚拟磁盘内删除镜像层、
-  列表同步移除；宿主 vhdx 大小不会自动缩小
-
-备份与清理页（左侧菜单新增）：
-- 备份容器：wslc container export -o 导出为 tar，可选目标文件夹。
-  ⚠ 实测运行中的容器会报 WSLC_E_CONTAINER_IS_RUNNING —— 工具自动
-  处理：先停止，导出完成后恢复原来的运行状态（闭环已实测通过）
-- 恢复容器：wslc image import 把 tar 导入为镜像（与 export 配对，
-  闭环实测：导出 8.30MB -> 清场 -> 导入 -> 用恢复的镜像重建容器并
-  成功运行）。端口/环境变量需在新建容器时重新填写
-- 清理-重建会话：终止会话（wslc system session terminate）+ 删除
-  storage.vhdx，下次使用自动重建空会话；红色卡片强警告（全部容器
-  与镜像丢失、不可恢复，请先备份）
+- 清理-重建会话卡片自动显示当前虚拟磁盘路径与占用大小（进入页面/
+  重建完成后自动刷新），确认框同步带上「重建后将释放 X MB」
+- ⚠ 修复应用卡死：RefreshSessionDiskInfo / OnRebuildSessionClick /
+  OnCompactDiskClick 在 UI 线程直接调 FindStorageVhdx -> GetStorageDir，
+  首次会同步跑 wslc info（最长 20s 超时）导致界面冻结 —— 全部改为
+  Task.Run 后台执行（这是 GetStorageDir 缓存修复后残留的首次调用卡点）
+- ⚠ 修复 vhdx 误选：FindStorageVhdx 用「长度 + long.MaxValue」给
+  storage.vhdx 加优先分，结果整数溢出为负，36MB 的 swap.vhdx 反而
+  赢了 825MB 的 storage.vhdx —— 改为先按名称找 storage、找不到再取
+  最大文件

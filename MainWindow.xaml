@@ -879,6 +879,10 @@
                                     <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
                                                Foreground="{DynamicResource SubTextBrush}"
                                                Text="终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），下次使用时自动重建一个全新的空会话。⚠ 这会清空该会话下的**全部容器与镜像**，且虚拟磁盘内的数据不可恢复 —— 如需保留请先「备份容器」。"/>
+                                    <TextBlock x:Name="TxtSessionDisk" FontSize="12" Margin="0,0,0,12"
+                                               TextWrapping="Wrap" LineHeight="19"
+                                               FontFamily="Consolas, Microsoft YaHei UI"
+                                               Foreground="{DynamicResource InfoBrush}"/>
                                     <StackPanel Orientation="Horizontal">
                                         <Button Style="{StaticResource RowDangerButton}" Padding="14,7"
                                                 Content="重建会话（清空所有容器与镜像）" Click="OnRebuildSessionClick"/>

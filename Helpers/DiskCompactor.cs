@@ -34,16 +34,23 @@ public static class DiskCompactor
 
         string best = null;
         long bestSize = -1;
+        FileInfo storageFi = null;
+        var candidates = new List<FileInfo>();
         foreach (var f in Directory.EnumerateFiles(dir, "*.vhdx", SearchOption.AllDirectories))
         {
-            try
-            {
-                var fi = new FileInfo(f);
-                // storage.vhdx 优先（swap.vhdx 一般不需要压）
-                var score = fi.Name.StartsWith("storage", StringComparison.OrdinalIgnoreCase) ? fi.Length + long.MaxValue : fi.Length;
-                if (score > bestSize) { bestSize = score; best = f; }
-            }
-            catch { }
+            try { candidates.Add(new FileInfo(f)); } catch { }
+        }
+
+        // storage.vhdx 优先（swap.vhdx 不需要压）。
+        // ⚠ 之前的写法 `length + long.MaxValue` 当优先加分时整数溢出为负，
+        //   反而让 36MB 的 swap 赢了 825MB 的 storage —— 已改成两段式选择。
+        storageFi = candidates.FirstOrDefault(f =>
+            f.Name.StartsWith("storage", StringComparison.OrdinalIgnoreCase));
+        if (storageFi != null) return storageFi.FullName;
+
+        foreach (var fi in candidates)
+        {
+            if (fi.Length > bestSize) { bestSize = fi.Length; best = fi.FullName; }
         }
         return best;
     }

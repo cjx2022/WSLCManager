@@ -207,7 +207,7 @@ public partial class MainWindow : Window
         Ui(() => TxtStatus.Text = "就绪");
 
         // 若正停在备份页，把演示容器同步进下拉（页面切换只在进入时刷新一次）
-        if (NavBackup.IsChecked == true) RefreshBackupContainers();
+        if (NavBackup.IsChecked == true) { RefreshBackupContainers(); RefreshSessionDiskInfo(); }
     }
 
     /// <summary>--fill-demo：往镜像页两个输入框填演示文本，便于截图核对排版（对齐 / 内边距）。</summary>
@@ -289,6 +289,7 @@ public partial class MainWindow : Window
         sb.AppendLine();
         sb.AppendLine("== 文字渲染 ==");
         sb.AppendLine("  " + TextQuality.Describe(this));
+        sb.AppendLine($"  [调试] TxtSessionDisk 文本 = \"{TxtSessionDisk?.Text}\"  可见性={TxtSessionDisk?.Visibility}");
         var realMode = TextOptions.GetTextFormattingMode(this);
         var realAa = TextOptions.GetTextRenderingMode(this);
         sb.AppendLine($"  实际生效 TextFormattingMode={realMode}  TextRenderingMode={realAa}");
@@ -794,7 +795,7 @@ public partial class MainWindow : Window
         PanelSettings.Visibility = NavSettings.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelBackup.Visibility = NavBackup.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
 
-        if (NavBackup.IsChecked == true) RefreshBackupContainers();
+        if (NavBackup.IsChecked == true) { RefreshBackupContainers(); RefreshSessionDiskInfo(); }
 
         if (NavContainer.IsChecked == true)
         {
@@ -1652,7 +1653,8 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnCompactDiskClick(object sender, RoutedEventArgs e)
     {
-        var vhdx = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
+        var vhdx = await System.Threading.Tasks.Task.Run(
+            () => WSLCManager.Helpers.DiskCompactor.FindStorageVhdx());
         if (vhdx == null) { SetStatus("未找到 wslc 会话的虚拟磁盘", "WarnBrush"); return; }
 
         var before = WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(vhdx);
@@ -1722,6 +1724,32 @@ public partial class MainWindow : Window
             CmbBackupContainer.SelectedItem = old;
         else if (CmbBackupContainer.Items.Count > 0)
             CmbBackupContainer.SelectedIndex = 0;
+    }
+
+    /// <summary>刷新「当前虚拟磁盘占用」显示（重建会话能腾出多少空间，一目了然）。</summary>
+    private void RefreshSessionDiskInfo()
+    {
+        if (TxtSessionDisk == null) return;
+        // ⚠ FindStorageVhdx → GetStorageDir 首次会同步跑 wslc info（最长 20s 超时），
+        // 绝不能在 UI 线程直接调 —— 会卡死界面（2026-10-10 二次踩同一坑，截图/测试全被拖死）。
+        TxtSessionDisk.Text = "正在读取虚拟磁盘信息…";
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                var vhdx = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
+                if (vhdx == null) return "当前虚拟磁盘：未找到（会话可能尚未初始化）";
+                var bytes = WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(vhdx);
+                return bytes >= 0
+                    ? $"当前虚拟磁盘：{vhdx}\n占用 {bytes / 1048576.0:N1} MB —— 重建会话后这块空间将全部释放"
+                    : $"当前虚拟磁盘：{vhdx}";
+            }
+            catch (Exception ex) { return "读取虚拟磁盘信息失败：" + ex.Message; }
+        })
+        .ContinueWith(t =>
+        {
+            if (TxtSessionDisk != null) TxtSessionDisk.Text = t.Result;
+        }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     /// <summary>备份：把选中容器导出为 tar 存档（wslc container export -o）。</summary>
@@ -1843,18 +1871,29 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnRebuildSessionClick(object sender, RoutedEventArgs e)
     {
+        // 查 vhdx 会触发 GetStorageDir（可能同步跑 wslc info），放后台
+        var (vhdx, diskBytes) = await System.Threading.Tasks.Task.Run(() =>
+        {
+            var v = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
+            return (v, v == null ? -1 : WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(v));
+        });
+        var diskLine = diskBytes >= 0
+            ? $"\n重建后将释放虚拟磁盘占用：{diskBytes / 1048576.0:N1} MB\n"
+            : "";
+
         var msg = "将终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），\n" +
                   "下次使用时自动重建一个全新的空会话。\n\n" +
                   $"当前会话下有 {_containers.Count} 个容器、{_images.Count} 个镜像，**全部会被清空**。\n" +
-                  "虚拟磁盘内的数据删除后不可恢复 —— 如需保留请先「备份容器」。\n\n" +
-                  "确定重建吗？";
+                  "虚拟磁盘内的数据删除后不可恢复 —— 如需保留请先「备份容器」。\n" +
+                  diskLine +
+                  "\n确定重建吗？";
         if (!AppDialog.Confirm(this, "重建会话", msg, okText: "重建", danger: true)) return;
         if (_busy) { SetStatus("已有任务在执行，请稍候", "WarnBrush"); return; }
 
         SetBusy(true, "正在重建会话…");
 
         // 1) 查会话 ID（表格第一列）
-        var lst = WslcService.ListSessions();
+        var lst = await System.Threading.Tasks.Task.Run(() => WslcService.ListSessions());
         var sessionId = TableParser.Lines(lst.All)
             .Select(l => l.Trim())
             .Where(l => l.Length > 0 && char.IsDigit(l[0]))
@@ -1898,6 +1937,7 @@ public partial class MainWindow : Window
         await RefreshContainersAsync(silent: true);
         await RefreshImagesAsync(silent: true);
         RefreshBackupContainers();
+        RefreshSessionDiskInfo();   // 重建后 vhdx 是全新的，刷新占用显示
 
         SetBusy(false);
         SetStatus("会话已重建（全部容器与镜像已清空）", "OkBrush");
