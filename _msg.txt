@@ -1,19 +1,18 @@
-feat: 设置页新增「压缩虚拟磁盘」功能（如实标注实测效果）
+feat: 新增「备份与清理」页 + 修正镜像删除按钮与提示
 
-对 wslc 会话的 storage.vhdx 执行官方标准压缩流程：
-  wsl --shutdown -> 提权 diskpart（select vdisk / attach readonly /
-  compact vdisk / detach）
+镜像删除（用户反馈两点）：
+- 被容器占用的镜像不再提供删除：删除按钮禁用并说明原因
+  （键盘路径兜底同样拦截）；未被占用的才可删
+- 未占用镜像的确认文案改为如实描述：在虚拟磁盘内删除镜像层、
+  列表同步移除；宿主 vhdx 大小不会自动缩小
 
-关键认知（全部实测）：
-- wslc 会话不在 wsl -l 发行版列表里，wsl --manage --compact 管不到它
-- 删除镜像后 vhdx 只增不减：拉 163MB nginx 再删，磁盘 +0.0 MB
-- diskpart compact 跑完 exit 0，但 825MB -> 825MB（0 回收）
-- 挂载进 WSL 执行 fstrim 报告 trim 1006.8GiB，再 compact 仍 0 回收
-  （TRIM 不传导到宿主 VHDX 文件）
-- 结论：ext4 删除不清零、compact 只收全零块，wslc 会话磁盘目前
-  没有可靠的在线回收手段；功能保留但界面如实标注此局限
-
-辅助修正：
-- 会话终止的正确命令是 wslc system session terminate（不存在
-  wslc session stop；session 在 system 子命令下）
-- diskpart 脚本文件必须 UTF-16 编码（路径含中文用户名，ANSI 会乱码）
+备份与清理页（左侧菜单新增）：
+- 备份容器：wslc container export -o 导出为 tar，可选目标文件夹。
+  ⚠ 实测运行中的容器会报 WSLC_E_CONTAINER_IS_RUNNING —— 工具自动
+  处理：先停止，导出完成后恢复原来的运行状态（闭环已实测通过）
+- 恢复容器：wslc image import 把 tar 导入为镜像（与 export 配对，
+  闭环实测：导出 8.30MB -> 清场 -> 导入 -> 用恢复的镜像重建容器并
+  成功运行）。端口/环境变量需在新建容器时重新填写
+- 清理-重建会话：终止会话（wslc system session terminate）+ 删除
+  storage.vhdx，下次使用自动重建空会话；红色卡片强警告（全部容器
+  与镜像丢失、不可恢复，请先备份）

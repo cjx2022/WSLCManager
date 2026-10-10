@@ -437,6 +437,54 @@ public static class WslcService
             return ProcRunner.Run(ExePath, args, 60000, ct);
         }, ct);
 
+    // ── 备份 / 恢复 ─────────────────────────────────────────────
+
+    /// <summary>
+    /// 导出容器文件系统为 tar（wslc container export -o &lt;file&gt; &lt;container&gt;）。
+    /// 运行中的容器也能导出。大容器耗时可能较长，timeout 给足。
+    /// </summary>
+    public static Task<RunResult> ExportContainerAsync(string container, string outputFile,
+        CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            return ProcRunner.Run(ExePath,
+                new[] { "container", "export", "-o", outputFile, container },
+                0, ct);   // 0 = 不限超时，导出大容器可能要几分钟
+        }, ct);
+
+    /// <summary>
+    /// 导入 tar 为镜像（wslc image import &lt;file&gt; &lt;name&gt;）。
+    /// 与 ExportContainerAsync 的产物配对使用。
+    /// </summary>
+    public static Task<RunResult> ImportImageAsync(string tarFile, string imageName,
+        CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            var args = new List<string> { "image", "import", tarFile };
+            if (!string.IsNullOrWhiteSpace(imageName)) args.Add(imageName);
+            return ProcRunner.Run(ExePath, args, 0, ct);
+        }, ct);
+
+    /// <summary>
+    /// 终止 wslc 会话（wslc system session terminate &lt;id&gt;）。
+    /// 注意：子命令是 system 下的 session，terminate 不叫 stop。
+    /// </summary>
+    public static Task<RunResult> TerminateSessionAsync(string sessionId, CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            return ProcRunner.Run(ExePath, new[] { "system", "session", "terminate", sessionId }, 60000, ct);
+        }, ct);
+
+    /// <summary>列出会话（wslc system session list，表格输出）。</summary>
+    public static RunResult ListSessions(int timeoutMs = 30000)
+    {
+        if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+        return ProcRunner.Run(ExePath, new[] { "system", "session", "list" }, timeoutMs);
+    }
+
     // ── 镜像占用对账 / 删除结果解读 ───────────────────────────────
 
     /// <summary>

@@ -193,6 +193,8 @@
                                  Tag="&#xE7B8;" Content="容器管理" Checked="OnNavChanged"/>
                     <RadioButton x:Name="NavImage" Style="{StaticResource NavItem}" GroupName="nav"
                                  Tag="&#xE958;" Content="镜像管理" Checked="OnNavChanged"/>
+                    <RadioButton x:Name="NavBackup" Style="{StaticResource NavItem}" GroupName="nav"
+                                 Tag="&#xE8E5;" Content="备份与清理" Checked="OnNavChanged"/>
                     <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" GroupName="nav"
                                  Tag="&#xE713;" Content="设置与加速" Checked="OnNavChanged"/>
                 </StackPanel>
@@ -820,6 +822,74 @@
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
+
+                <Grid x:Name="PanelBackup" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+
+                            <Border Style="{StaticResource Card}" Padding="18,16">
+                                <StackPanel>
+                                    <TextBlock Text="备份容器" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
+                                               Foreground="{DynamicResource SubTextBrush}"
+                                               Text="把容器的文件系统导出为 tar 存档（wslc container export）。⚠ wslc 要求导出时容器必须处于停止状态 —— 工具会自动处理：先停止，导出完成后自动恢复运行。"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="CmbBackupContainer" Style="{StaticResource ModernComboBox}"
+                                                  Height="34" VerticalContentAlignment="Center"/>
+                                        <Button Grid.Column="1" Style="{StaticResource PrimaryButton}" Margin="10,0,0,0"
+                                                Content="备份到…" Click="OnBackupExportClick"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="恢复容器" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
+                                               Foreground="{DynamicResource SubTextBrush}"
+                                               Text="把备份的 tar 导入为镜像（wslc image import）。导入完成后，到「镜像管理」页选中它并点「用选中镜像新建容器」即可重建容器；端口与环境变量需在新建时重新填写。"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtRestoreFile" Style="{StaticResource ModernTextBox}"
+                                                 Height="34" VerticalContentAlignment="Center" Padding="10,0"
+                                                 IsReadOnly="True"
+                                                 ToolTip="通过「选择备份…」挑选 tar 文件"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                                            <Button Style="{StaticResource ToolButton}" Content="选择备份…"
+                                                    Click="OnRestoreBrowseClick"/>
+                                            <Button Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"
+                                                    Content="导入" Click="OnRestoreImportClick"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,12,0,0"
+                                    BorderBrush="{DynamicResource ErrBrush}" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="清理：重建会话" Style="{StaticResource SectionTitle}"
+                                               Foreground="{DynamicResource ErrBrush}"/>
+                                    <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
+                                               Foreground="{DynamicResource SubTextBrush}"
+                                               Text="终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），下次使用时自动重建一个全新的空会话。⚠ 这会清空该会话下的**全部容器与镜像**，且虚拟磁盘内的数据不可恢复 —— 如需保留请先「备份容器」。"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Style="{StaticResource RowDangerButton}" Padding="14,7"
+                                                Content="重建会话（清空所有容器与镜像）" Click="OnRebuildSessionClick"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
             </Grid>
         </Grid>
 

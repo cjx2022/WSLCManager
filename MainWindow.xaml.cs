@@ -205,6 +205,9 @@ public partial class MainWindow : Window
 
         // 状态栏不带本机版本号
         Ui(() => TxtStatus.Text = "就绪");
+
+        // 若正停在备份页，把演示容器同步进下拉（页面切换只在进入时刷新一次）
+        if (NavBackup.IsChecked == true) RefreshBackupContainers();
     }
 
     /// <summary>--fill-demo：往镜像页两个输入框填演示文本，便于截图核对排版（对齐 / 内边距）。</summary>
@@ -624,6 +627,7 @@ public partial class MainWindow : Window
                 case "image": NavImage.IsChecked = true; break;
                 case "settings": NavSettings.IsChecked = true; break;
                 case "env": NavEnv.IsChecked = true; break;
+                case "backup": NavBackup.IsChecked = true; break;
             }
         }
         catch { }
@@ -788,6 +792,9 @@ public partial class MainWindow : Window
         PanelContainer.Visibility = NavContainer.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelImage.Visibility = NavImage.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelSettings.Visibility = NavSettings.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PanelBackup.Visibility = NavBackup.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+        if (NavBackup.IsChecked == true) RefreshBackupContainers();
 
         if (NavContainer.IsChecked == true)
         {
@@ -1522,7 +1529,16 @@ public partial class MainWindow : Window
     }
 
     private void OnImageSelectionChanged(object sender, SelectionChangedEventArgs e)
-        => _selImage = GridImages.SelectedItem as ImageInfo;
+    {
+        _selImage = GridImages.SelectedItem as ImageInfo;
+        // 被容器占用的镜像没有删除资格（按钮禁用 + 提示说明原因）
+        if (BtnImgRemove == null) return;
+        var img = _selImage;
+        BtnImgRemove.IsEnabled = img != null && !img.InUse;
+        BtnImgRemove.ToolTip = img == null ? "先在列表中选择一个镜像"
+            : img.InUse ? $"被 {img.Usage.Total} 个容器使用，不能删除（先删容器）"
+            : "删除该镜像（虚拟磁盘内删除，列表同步移除）";
+    }
 
     private void OnImageRowRemoveClick(object sender, RoutedEventArgs e)
     {
@@ -1536,6 +1552,13 @@ public partial class MainWindow : Window
     {
         var img = _selImage;
         if (img == null) { SetStatus("请先在列表中选择一个镜像", "WarnBrush"); return; }
+        if (img.InUse)
+        {
+            // 被容器占用的镜像不提供删除（按钮本身也会禁用，这里是键盘路径的兜底）
+            var u = img.Usage;
+            SetStatus($"镜像 {img.Reference} 正被 {u.Total} 个容器使用，不能删除", "WarnBrush");
+            return;
+        }
         ConfirmRemoveImage(img);
     }
 
@@ -1560,7 +1583,10 @@ public partial class MainWindow : Window
         else
         {
             body = $"确定要删除镜像「{img.Reference}」吗？\n\n" +
-                   "该镜像没有被任何容器引用，删除会真正回收镜像层。";
+                   "该镜像没有被任何容器引用，删除将在虚拟磁盘内真正删除镜像层，\n" +
+                   "删除成功后列表会同步移除。\n\n" +
+                   "⚠ 注意：宿主的 storage.vhdx 文件大小不会自动缩小（虚拟磁盘只增不减）。\n" +
+                   "如需回收宿主空间，请到「备份与清理」页重建会话。";
         }
 
         if (!AppDialog.Confirm(this, "删除镜像", body, okText: "删除", danger: true)) return;
@@ -1681,6 +1707,209 @@ public partial class MainWindow : Window
             SetStatus("压缩完成，但本磁盘没有可回收的碎片空间", "InfoBrush");
         else
             SetStatus("压缩失败：" + r.Error, "ErrBrush");
+    }
+
+    // ── 备份与清理 ─────────────────────────────────────────────
+
+    /// <summary>进入备份页时刷新容器下拉（按名称排序）。</summary>
+    private void RefreshBackupContainers()
+    {
+        var old = CmbBackupContainer.SelectedItem as string;
+        CmbBackupContainer.Items.Clear();
+        foreach (var n in _containers.Select(x => x.Name).Where(n => !string.IsNullOrWhiteSpace(n)).OrderBy(n => n))
+            CmbBackupContainer.Items.Add(n);
+        if (old != null && CmbBackupContainer.Items.Contains(old))
+            CmbBackupContainer.SelectedItem = old;
+        else if (CmbBackupContainer.Items.Count > 0)
+            CmbBackupContainer.SelectedIndex = 0;
+    }
+
+    /// <summary>备份：把选中容器导出为 tar 存档（wslc container export -o）。</summary>
+    private async void OnBackupExportClick(object sender, RoutedEventArgs e)
+    {
+        var name = CmbBackupContainer.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(name)) { SetStatus("请先选择要备份的容器", "WarnBrush"); return; }
+        if (_busy) { SetStatus("已有任务在执行，请稍候", "WarnBrush"); return; }
+
+        using var dlg = new System.Windows.Forms.SaveFileDialog
+        {
+            Title = "选择备份保存位置",
+            FileName = $"{name}-{DateTime.Now:yyyyMMdd-HHmmss}.tar",
+            Filter = "tar 存档 (*.tar)|*.tar|所有文件 (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this.GetIWin32WindowOwner()) != System.Windows.Forms.DialogResult.OK) return;
+
+        // ⚠ 实测：wslc 对运行中的容器导出会报 WSLC_E_CONTAINER_IS_RUNNING，
+        // 必须先停止。这里自动处理：停止 → 导出 → 恢复原来的运行状态。
+        var target = _containers.FirstOrDefault(x => x.Name == name);
+        var wasRunning = target != null && target.State == ContainerState.Running;
+        if (wasRunning)
+        {
+            if (!AppDialog.Confirm(this, "备份容器",
+                $"容器「{name}」正在运行。\n\n导出要求容器处于停止状态：工具会先停止它，" +
+                "导出完成后自动重新启动。\n\n继续吗？", okText: "停止并导出")) return;
+        }
+
+        SetBusy(true, wasRunning ? $"正在停止容器 {name}…" : $"正在导出容器 {name}…（容器越大越久）");
+
+        if (wasRunning)
+        {
+            var st = await WslcService.StopAsync(name);
+            if (!st.Success)
+            {
+                SetBusy(false);
+                SetStatus("停止容器失败：" + One(st.StdErr), "ErrBrush");
+                return;
+            }
+            Log($"已停止容器 {name}（导出前置条件）", TxtImageLog);
+        }
+
+        Log($"执行：wslc container export -o \"{dlg.FileName}\" {name}", TxtImageLog);
+
+        var r = await WslcService.ExportContainerAsync(name, dlg.FileName);
+
+        // 导出完把原来运行中的容器拉起来
+        if (wasRunning && r.Success)
+        {
+            SetStatus("导出完成，正在恢复容器运行…", "InfoBrush");
+            var sr = await WslcService.StartAsync(name);
+            Log(sr.Success ? $"容器 {name} 已重新启动" : $"容器 {name} 重新启动失败（可手动启动）",
+                TxtImageLog);
+        }
+        SetBusy(false);
+
+        if (r.Success)
+        {
+            var size = File.Exists(dlg.FileName) ? new FileInfo(dlg.FileName).Length : 0;
+            Log($"备份完成：{dlg.FileName}（{size / 1048576.0:N1} MB）", TxtImageLog);
+            SetStatus($"已备份容器 {name}", "OkBrush");
+        }
+        else
+        {
+            Log("备份失败：" + One(r.StdErr), TxtImageLog);
+            SetStatus("备份失败", "ErrBrush");
+        }
+    }
+
+    private void OnRestoreBrowseClick(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.OpenFileDialog
+        {
+            Title = "选择备份 tar 文件",
+            Filter = "tar 存档 (*.tar)|*.tar|所有文件 (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this.GetIWin32WindowOwner()) == System.Windows.Forms.DialogResult.OK)
+            TxtRestoreFile.Text = dlg.FileName;
+    }
+
+    /// <summary>恢复：把备份 tar 导入为镜像（wslc image import），之后可用它新建容器。</summary>
+    private async void OnRestoreImportClick(object sender, RoutedEventArgs e)
+    {
+        var file = TxtRestoreFile.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
+        { SetStatus("请先选择有效的备份 tar 文件", "WarnBrush"); return; }
+        if (_busy) { SetStatus("已有任务在执行，请稍候", "WarnBrush"); return; }
+
+        // 镜像名：取文件名小写、去掉扩展名与非法字符
+        var baseName = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
+        var sb = new System.Text.StringBuilder();
+        foreach (var ch in baseName) sb.Append(char.IsLetterOrDigit(ch) || ch is '.' or '-' or '_' or '/' ? ch : '-');
+        var imageName = sb.ToString().Trim('-');
+        if (imageName.Length == 0) imageName = "restored";
+        imageName += ":restored";
+
+        SetBusy(true, $"正在导入为镜像 {imageName}…");
+        Log($"执行：wslc image import \"{file}\" {imageName}", TxtImageLog);
+
+        var r = await WslcService.ImportImageAsync(file, imageName);
+        SetBusy(false);
+
+        if (r.Success)
+        {
+            Log($"导入完成：镜像 {imageName} 已就绪。到「镜像管理」页选中它并点「用选中镜像新建容器」即可重建容器。", TxtImageLog);
+            SetStatus($"已导入镜像 {imageName}", "OkBrush");
+            await RefreshImagesAsync(silent: true);
+        }
+        else
+        {
+            Log("导入失败：" + One(r.StdErr), TxtImageLog);
+            SetStatus("导入失败", "ErrBrush");
+        }
+    }
+
+    /// <summary>
+    /// 清理：终止 wslc 会话并删除其虚拟磁盘，下次使用时自动重建空会话。
+    /// ⚠ 该会话下全部容器与镜像都会丢失 —— 这就是为什么它放在红色卡片里。
+    /// </summary>
+    private async void OnRebuildSessionClick(object sender, RoutedEventArgs e)
+    {
+        var msg = "将终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），\n" +
+                  "下次使用时自动重建一个全新的空会话。\n\n" +
+                  $"当前会话下有 {_containers.Count} 个容器、{_images.Count} 个镜像，**全部会被清空**。\n" +
+                  "虚拟磁盘内的数据删除后不可恢复 —— 如需保留请先「备份容器」。\n\n" +
+                  "确定重建吗？";
+        if (!AppDialog.Confirm(this, "重建会话", msg, okText: "重建", danger: true)) return;
+        if (_busy) { SetStatus("已有任务在执行，请稍候", "WarnBrush"); return; }
+
+        SetBusy(true, "正在重建会话…");
+
+        // 1) 查会话 ID（表格第一列）
+        var lst = WslcService.ListSessions();
+        var sessionId = TableParser.Lines(lst.All)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && char.IsDigit(l[0]))
+            .Select(l => l.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0])
+            .FirstOrDefault();
+
+        // 2) 终止会话（释放 vhdx 占用）
+        if (sessionId != null)
+        {
+            var tr = await WslcService.TerminateSessionAsync(sessionId);
+            Log($"已终止会话 {sessionId}（exit={tr.ExitCode}）", TxtImageLog);
+        }
+        else
+        {
+            Log("未找到活动会话（可能已经终止）", TxtImageLog);
+        }
+
+        // 3) 删除会话目录（虚拟磁盘与全部数据）
+        var dir = WslcService.GetStorageDir();
+        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+        {
+            try
+            {
+                Directory.Delete(dir, true);
+                Log($"已删除会话目录：{dir}", TxtImageLog);
+            }
+            catch (Exception ex)
+            {
+                Log("删除会话目录失败：" + ex.Message, TxtImageLog);
+                SetBusy(false);
+                SetStatus("重建失败：会话目录删除失败", "ErrBrush");
+                return;
+            }
+        }
+
+        // 4) 触发 wslc 重建空会话（任意命令都会自动建）
+        await System.Threading.Tasks.Task.Run(() => WslcService.ListSessions());
+
+        _containers.Clear();
+        _images.Clear();
+        await RefreshContainersAsync(silent: true);
+        await RefreshImagesAsync(silent: true);
+        RefreshBackupContainers();
+
+        SetBusy(false);
+        SetStatus("会话已重建（全部容器与镜像已清空）", "OkBrush");
+    }
+
+    /// <summary>WinForms 文件对话框的属主窗口包装（WPF Window 不是 IWin32Window）。</summary>
+    private System.Windows.Forms.IWin32Window GetIWin32WindowOwner()
+        => new Win32WindowHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+
+    private sealed class Win32WindowHandle(IntPtr handle) : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; } = handle;
     }
 
     private void OnOpenWslcSettingsClick(object sender, RoutedEventArgs e)
