@@ -148,7 +148,63 @@ public partial class MainWindow : Window
         }
 
         ApplyStressData();
+        ApplyDemoMode();
         ApplyFillDemo();
+    }
+
+    /// <summary>
+    /// --demo：**纯演示数据**模式，用于对外截图 / 文档配图。
+    /// 清掉本机真实的容器、镜像与状态栏版本信息，只留构造出来的样例，
+    /// 避免把本机环境（容器名、版本号等）带进公开材料。
+    /// </summary>
+    private void ApplyDemoMode()
+    {
+        if (!Environment.GetCommandLineArgs()
+                .Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        _containers.Clear();
+        _images.Clear();
+
+        // 关键：停掉实时刷新定时器，否则它会在截图前把演示数据换成真实数据
+        try { _realtime.Stop(); } catch { }
+
+        var demo = new (string Name, string Image, string Ports, bool Running, double Cpu, double Mem)[]
+        {
+            ("web-frontend",  "library/nginx:1.27-alpine",  "8080:80",   true,  0.42, 3.10),
+            ("api-server",    "library/python:3.12-slim",   "5000:5000", true,  1.85, 12.40),
+            ("redis-cache",   "library/redis:7-alpine",     "6379:6379", true,  0.15, 1.20),
+            ("postgres-main", "library/postgres:16",        "5432:5432", true,  0.90, 8.65),
+            ("worker-queue",  "library/python:3.12-slim",   "",          false, 0.00, 0.00),
+            ("nginx-gateway", "library/nginx:stable",       "80:80,443:443", false, 0.00, 0.00),
+        };
+
+        for (int i = 0; i < demo.Length; i++)
+        {
+            var d = demo[i];
+            var c = new ContainerInfo
+            {
+                Id = $"demo{i:D12}",
+                Name = d.Name,
+                Image = d.Image,
+                Ports = d.Ports,
+                Status = d.Running ? "Up 12 minutes" : "Exited (0) 3 minutes ago",
+            };
+            c.ApplyStatus(d.Running ? "running" : "exited", c.Status);
+            if (d.Running)
+                c.ApplyStats(new ContainerStats
+                {
+                    Cpu = $"{d.Cpu:F2}%",
+                    MemPercent = $"{d.Mem:F2}%",           // 列表内存列的进度条读这个
+                    Mem = $"{d.Mem * 25:F0}MB / 2GB",
+                    Net = "1.2MB / 0.8MB",
+                    Pids = "12"
+                });
+            _containers.Add(c);
+        }
+
+        // 状态栏不带本机版本号
+        Ui(() => TxtStatus.Text = "就绪");
     }
 
     /// <summary>--fill-demo：往镜像页两个输入框填演示文本，便于截图核对排版（对齐 / 内边距）。</summary>

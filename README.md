@@ -1,9 +1,15 @@
 # WSLC 容器管理器（WSLCManager）
 
+<p align="center">
+  <img src="docs/logo.png" width="140" alt="WSLCManager Logo">
+</p>
+
 WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），单文件绿色版。
 
 > **非官方工具**：本项目是独立第三方实现，与微软及任何镜像服务商**均无隶属或背书关系**。
 > `WSL` / `wslc` 是微软的产品；本工具只是调用它们的命令行接口。
+
+![WSLCManager 主界面](docs/screenshot-container.png)
 
 ## 这是什么
 
@@ -239,7 +245,7 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 | 许可 | MIT，可自由使用 / 修改 / 再分发（保留版权声明即可） |
 | 第三方代码依赖 | 仅 `System.Text.Encoding.CodePages`（MIT） —— 用于 GBK 解码回退 |
 | 字体 | **不打包任何字体文件**，只按名字引用 Windows 自带字体（见下） |
-| 品牌图形 | `Assets/logo.png` + `app.ico` 由 `_tools/make_logo.py` 从仓库内素材派生，脚本自包含、可复现 |
+| 品牌图形 | **logo 由作者设计**（深蓝配色，容器 / 鲸鱼意象，呼应 WSL 形象）。`_tools/make_logo.py` 从原始素材派生 README 图、标题栏图与多尺寸 `app.ico`，脚本自包含、可复现 |
 | 与厂商的关系 | 不隶属、不背书任何镜像服务商；著作权信息只写作者个人。设置里预置的加速地址是第三方**公开**站点，随时可能失效，使用风险自负 |
 
 ### 字体
