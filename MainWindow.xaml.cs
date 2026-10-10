@@ -1740,9 +1740,17 @@ public partial class MainWindow : Window
                 var vhdx = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
                 if (vhdx == null) return "当前虚拟磁盘：未找到（会话可能尚未初始化）";
                 var bytes = WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(vhdx);
-                return bytes >= 0
-                    ? $"当前虚拟磁盘：{vhdx}\n占用 {bytes / 1048576.0:N1} MB —— 重建会话后这块空间将全部释放"
-                    : $"当前虚拟磁盘：{vhdx}";
+                if (bytes < 0) return $"当前虚拟磁盘：{vhdx}";
+
+                // 实测（2026-10-10）：全新空会话自身约占 588 MB —— ext4 日志区/块分配表
+                // 等格式化结构 + wslc 引擎目录（挂载实测内部数据仅约 350KB）。
+                // 这部分是"底座"，重建/压缩都消不掉，能释放的是超出它的部分。
+                var mb = bytes / 1048576.0;
+                var reclaim = mb - DiskCompactor.EmptySessionBaseMB;
+                var tip = reclaim > 16
+                    ? $"重建后约降至 {DiskCompactor.EmptySessionBaseMB} MB，可释放约 {reclaim:N0} MB"
+                    : "已接近空会话的运行时底座，重建收益有限";
+                return $"当前虚拟磁盘：{vhdx}\n占用 {mb:N1} MB —— {tip}";
             }
             catch (Exception ex) { return "读取虚拟磁盘信息失败：" + ex.Message; }
         })
@@ -1877,9 +1885,16 @@ public partial class MainWindow : Window
             var v = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
             return (v, v == null ? -1 : WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(v));
         });
-        var diskLine = diskBytes >= 0
-            ? $"\n重建后将释放虚拟磁盘占用：{diskBytes / 1048576.0:N1} MB\n"
-            : "";
+        string diskLine;
+        if (diskBytes >= 0)
+        {
+            var mb = diskBytes / 1048576.0;
+            var reclaim = mb - WSLCManager.Helpers.DiskCompactor.EmptySessionBaseMB;
+            diskLine = reclaim > 16
+                ? $"\n重建后将释放约 {reclaim:N0} MB（新磁盘自身约 {WSLCManager.Helpers.DiskCompactor.EmptySessionBaseMB} MB 为运行时底座，仍会存在）\n"
+                : $"\n当前占用（{mb:N0} MB）已接近空会话的运行时底座（约 {WSLCManager.Helpers.DiskCompactor.EmptySessionBaseMB} MB），重建收益有限。\n";
+        }
+        else diskLine = "";
 
         var msg = "将终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），\n" +
                   "下次使用时自动重建一个全新的空会话。\n\n" +

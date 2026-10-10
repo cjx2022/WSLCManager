@@ -26,6 +26,14 @@ namespace WSLCManager.Helpers;
 /// </summary>
 public static class DiskCompactor
 {
+    /// <summary>
+    /// 全新空会话虚拟磁盘自身的底座大小（MB）。实测 2026-10-10：重建后 0 镜像 0 容器，
+    /// storage.vhdx 仍占 588 MB —— ext4 日志区/块分配表等格式化结构（对 1TB 虚拟容量）
+    /// + wslc 引擎目录（挂载实测内部实际数据仅约 350KB）。这部分重建/压缩都消不掉，
+    /// 重建能释放的是「当前占用 − 底座」。
+    /// </summary>
+    public const long EmptySessionBaseMB = 588;
+
     /// <summary>要压缩的 vhdx 路径；取不到返回 null。</summary>
     public static string FindStorageVhdx()
     {
