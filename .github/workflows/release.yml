@@ -57,5 +57,20 @@ jobs:
             gh release upload "${GITHUB_REF_NAME}" publish/WSLCManager.exe --clobber
           fi
 
-          echo "--- 结果核对 ---"
-          gh release view "${GITHUB_REF_NAME}" --json tagName,name,isDraft,isPrerelease
+          # GitHub 删除标签时会**连带删除**该标签上的 Release，而这个删除动作可能延迟到
+          # 本步骤之后才执行 —— 于是「删标签再重建」这种触发方式下，刚建好的 Release
+          # 会被随后的删除任务清掉（构建日志全绿、release 却查不到，就是这个原因）。
+          # 所以建完复查几轮，发现被清就立刻重建，保证跑完一定留得下一个 Release。
+          for i in 1 2 3 4; do
+            sleep 20
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              echo "第 ${i} 次复查：Release 在位"
+              gh release view "${GITHUB_REF_NAME}" --json tagName,name,isDraft,isPrerelease
+              exit 0
+            fi
+            echo "第 ${i} 次复查：Release 不在，重建"
+            gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
+              --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" || true
+          done
+          echo "::error::建成之后 Release 仍不存在，请检查仓库的 Releases 权限设置"
+          exit 1
