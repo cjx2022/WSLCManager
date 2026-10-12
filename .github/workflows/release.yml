@@ -1,0 +1,50 @@
+name: Release
+
+# 推 v* 标签时自动构建单文件版并发布 Release；也可在 Actions 页手动触发。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 发布单文件版
+        run: >
+          dotnet publish WSLCManager.csproj
+          -c Release -r win-x64
+          -p:PublishSingleFile=true
+          -p:PublishSelfContained=false
+          -o publish
+
+      - name: 创建 Release 并上传附件
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            TITLE="$(head -1 "$NOTES")"
+            tail -n +2 "$NOTES" > "$RUNNER_TEMP/notes.md"
+            gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
+              --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
+              --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
