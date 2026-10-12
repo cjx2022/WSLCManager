@@ -5,7 +5,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import shot as S
 
-EXE = r"D:\workbuddy\wslc-manager\bin\Release\net8.0-windows\WSLCManager.exe"
+ROOT = os.path.dirname(HERE)          # 仓库根目录 = _tools/ 的上一级
+EXE = os.path.join(ROOT, "bin", "Release", "net8.0-windows", "WSLCManager.exe")
 TITLE = "WSLC 容器管理器"
 OUTDIR = os.path.abspath(os.path.join(HERE, "..", "_shots"))
 os.makedirs(OUTDIR, exist_ok=True)

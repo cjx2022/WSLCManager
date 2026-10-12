@@ -1,4 +1,9 @@
+import os
+
 from PIL import Image, ImageDraw
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)          # 仓库根目录 = _tools/ 的上一级
 
 S = 512
 c1 = (43, 108, 246)    # #2B6CF6
@@ -47,7 +52,7 @@ ImageDraw.Draw(dot).ellipse([int(S * 0.18), int(S * 0.74), int(S * 0.30), int(S 
                             fill=(125, 232, 175, 255))
 img = Image.alpha_composite(img, dot)
 
-img.save(r"D:\workbuddy\wslc-manager\app.ico",
+img.save(os.path.join(ROOT, "app.ico"),
          sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-img.resize((256, 256), Image.LANCZOS).save(r"D:\workbuddy\wslc-manager\_tools\icon_preview.png")
+img.resize((256, 256), Image.LANCZOS).save(os.path.join(HERE, "icon_preview.png"))
 print("OK")

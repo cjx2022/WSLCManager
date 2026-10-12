@@ -5,7 +5,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import shot
 
-EXE = r"D:\workbuddy\wslc-manager\bin\Release\net8.0-windows\WSLCManager.exe"
+ROOT = os.path.dirname(HERE)          # 仓库根目录 = _tools/ 的上一级
+EXE = os.path.join(ROOT, "bin", "Release", "net8.0-windows", "WSLCManager.exe")
 TITLE = "WSLC 容器管理器"
 
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "_shots", "main.png")

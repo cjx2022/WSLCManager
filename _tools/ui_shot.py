@@ -2,7 +2,8 @@
 import os, sys, subprocess, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXE = r"D:\workbuddy\wslc-manager\bin\Release\net8.0-windows\WSLCManager.exe"
+ROOT = os.path.dirname(HERE)          # 仓库根目录 = _tools/ 的上一级
+EXE = os.path.join(ROOT, "bin", "Release", "net8.0-windows", "WSLCManager.exe")
 OUT = os.path.abspath(os.path.join(HERE, "..", "_shots"))
 os.makedirs(OUT, exist_ok=True)
 
