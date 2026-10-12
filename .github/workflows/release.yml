@@ -32,7 +32,7 @@ jobs:
           -p:PublishSelfContained=false
           -o publish
 
-      - name: 创建 Release 并上传附件
+      - name: 创建或更新 Release 并上传附件
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,8 +42,13 @@ jobs:
           if [ -f "$NOTES" ]; then
             TITLE="$(head -1 "$NOTES")"
             tail -n +2 "$NOTES" > "$RUNNER_TEMP/notes.md"
-            gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
-              --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              gh release edit "${GITHUB_REF_NAME}" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+              gh release upload "${GITHUB_REF_NAME}" publish/WSLCManager.exe --clobber
+            else
+              gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
+                --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+            fi
           else
             gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
               --title "${GITHUB_REF_NAME}" --generate-notes
