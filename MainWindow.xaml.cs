@@ -30,11 +30,20 @@ public partial class MainWindow : Window
     private bool _ready;
     private bool _busy;
     private bool _reallyExit;
+
+    /// <summary><c>--demo</c>：列表里是演示数据，所有真实刷新一律短路（见 ApplyDemoMode）。</summary>
+    private bool _demoMode;
     private CancellationTokenSource _statsCts;
     private TrayIcon _tray;
 
     private ContainerInfo _selContainer;
     private ImageInfo _selImage;
+
+    /// <summary>
+    /// 版本号的**显示兜底**。真正的事实来源是 csproj 的 <c>&lt;Version&gt;</c>（进程序集元数据），
+    /// 这里只在「取不到程序集版本」时用（正常构建永远取得到）。改版本时两处一起改。
+    /// </summary>
+    internal const string AppVersion = "0.9.1";
 
     /// <summary>
     /// 「常用镜像源」预设（设置页的可点按钮）。
@@ -93,7 +102,7 @@ public partial class MainWindow : Window
         catch { }
 
         TxtTitleHint.Text = "v" + (System.Reflection.Assembly.GetExecutingAssembly()
-            .GetName().Version?.ToString(3) ?? "0.9.0");
+            .GetName().Version?.ToString(3) ?? AppVersion);
 
         TxtAbout.Text =
             "WSLC 容器管理器 —— WSL 容器（wslc）的可视化工具，仅调用官方 wsl / wslc 命令。\r\n" +
@@ -112,6 +121,9 @@ public partial class MainWindow : Window
 
         // --click-start=<容器名>：走真实 UI 路径点一次「启动」，导出界面文案（见方法注释）
         await ClickStartAsync();
+
+        // --right-copy=<容器名>：在真实界面上对三列各发一次右键，导出剪贴板内容与状态栏回执
+        await RightCopyCheckAsync();
 
         await DumpLayoutAsync();
         await HandleScreenshotAsync();
@@ -163,11 +175,15 @@ public partial class MainWindow : Window
                 .Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase)))
             return;
 
+        _demoMode = true;
         _containers.Clear();
         _images.Clear();
 
-        // 关键：停掉实时刷新定时器，否则它会在截图前把演示数据换成真实数据
+        // 关键 1：停掉实时刷新定时器，否则它会在截图前把演示数据换成真实数据
         try { _realtime.Stop(); } catch { }
+        // 关键 2：定时器能停，**已经发出去的那次刷新停不掉**（OnNavChanged 里是
+        // `_ = RefreshContainersAsync()`）。所以靠上面的 _demoMode 让所有真实刷新直接返回 ——
+        // 否则 --screenshot 会截到被清空的列表（--dump-layout 走同步路径反而看不出问题）。
 
         var demo = new (string Name, string Image, string Ports, bool Running, double Cpu, double Mem)[]
         {
@@ -290,6 +306,11 @@ public partial class MainWindow : Window
         sb.AppendLine("== 文字渲染 ==");
         sb.AppendLine("  " + TextQuality.Describe(this));
         sb.AppendLine($"  [调试] TxtSessionDisk 文本 = \"{TxtSessionDisk?.Text}\"  可见性={TxtSessionDisk?.Visibility}");
+        // 集合条数 vs 网格条数：两者不一致时说明「数据在、网格没渲染」，能一眼分开
+        // 「数据没加载」和「界面没刷新」这两类完全不同的问题。
+        sb.AppendLine($"  [调试] 集合条数 容器={_containers.Count} 镜像={_images.Count}" +
+                      $"  网格条数 容器={GridContainers.Items.Count} 镜像={GridImages.Items.Count}" +
+                      $"  demoMode={_demoMode}");
         var realMode = TextOptions.GetTextFormattingMode(this);
         var realAa = TextOptions.GetTextRenderingMode(this);
         sb.AppendLine($"  实际生效 TextFormattingMode={realMode}  TextRenderingMode={realAa}");
@@ -526,6 +547,139 @@ public partial class MainWindow : Window
         catch (Exception ex) { lines.Add("!! 异常: " + ex); }
 
         try { File.WriteAllText(outPath, string.Join(Environment.NewLine, lines), new UTF8Encoding(false)); } catch { }
+    }
+
+    /// <summary>
+    /// --right-copy=&lt;容器名&gt; [--dump-ui=&lt;路径&gt;]：在**真实界面上**对「容器名称 / 镜像 / 端口映射」
+    /// 三列各发一次右键，导出剪贴板内容、状态栏文本与状态圆点色。
+    ///
+    /// 为什么要驱动到单元格这一层、而不是直接调 <see cref="CopyToClipboard"/>：
+    /// 要验的是「右键落在这一格 → 分派到正确的列 → 复制全量值」这条链，而分派靠
+    /// `DataGridCell.Column.Header` + `e.OriginalSource` 的祖先关系 —— 直接调方法就把判据
+    /// 全绕过去了，届时列名写错、命中不到单元格，探针照样全绿（假绿）。
+    /// 事件发在**单元格模板那层 Border**（撑满整格、Background=Transparent）上，
+    /// 与用户右键点空格子命中的是同一个元素。
+    /// 默认输出到程序目录下的 right_copy_result.txt。建议配 `--demo` 跑：6 条固定演示数据，
+    /// 期望值由演示数据直接给出，不依赖本机真实容器。
+    /// </summary>
+    private async System.Threading.Tasks.Task RightCopyCheckAsync()
+    {
+        var argv = Environment.GetCommandLineArgs();
+        var arg = argv.FirstOrDefault(a => a.StartsWith("--right-copy=", StringComparison.OrdinalIgnoreCase));
+        if (arg == null) return;
+
+        var name = arg.Substring("--right-copy=".Length).Trim().Trim('"');
+        var outArg = argv.FirstOrDefault(a => a.StartsWith("--dump-ui=", StringComparison.OrdinalIgnoreCase));
+        var outPath = outArg?.Substring("--dump-ui=".Length).Trim().Trim('"') ?? "";
+        if (outPath.Length == 0) outPath = Path.Combine(AppContext.BaseDirectory, "right_copy_result.txt");
+
+        var lines = new List<string>
+        {
+            "== 真实 UI 路径：右键复制（容器名称 / 镜像 / 端口映射）==",
+            "目标容器     : " + name,
+            "-demo 演示模式: " + _demoMode,
+            "",
+        };
+
+        try
+        {
+            NavContainer.IsChecked = true;      // 同 --click-start：容器页折叠时不生成行容器
+            await System.Threading.Tasks.Task.Delay(2500);
+            UpdateLayout();
+            GridContainers.UpdateLayout();
+
+            var row = Descendants<DataGridRow>(GridContainers)
+                .FirstOrDefault(r => (r.Item as ContainerInfo)?.Name == name);
+
+            if (row == null)
+            {
+                lines.Add("!! 列表里找不到该容器行（可能没刷新出来）");
+            }
+            else
+            {
+                var item = row.Item as ContainerInfo;
+                var cells = Descendants<DataGridCell>(row).ToList();
+                lines.Add("该行单元格数 : " + cells.Count);
+                lines.Add("列头         : " + string.Join(" | ",
+                    cells.Select(c => c.Column?.Header as string ?? "?")));
+                lines.Add("");
+
+                // 期望值 = 全量字段（不是列表里截断过的显示值）
+                var expects = new (string Header, string Expect)[]
+                {
+                    ("容器名称", item?.Name ?? ""),
+                    ("镜像", item?.Image ?? ""),
+                    ("端口映射", item?.Ports ?? ""),
+                };
+
+                foreach (var (header, expect) in expects)
+                {
+                    lines.Add($"── 右键「{header}」 ──");
+                    var cell = cells.FirstOrDefault(c => (c.Column?.Header as string) == header);
+                    if (cell == null) { lines.Add("!! 找不到该列的单元格"); lines.Add(""); continue; }
+
+                    // 先把剪贴板与状态栏置成已知态，否则「没写进去」会被上一轮的残留值掩盖
+                    try { Clipboard.Clear(); } catch { }
+                    SetStatus("（自检前清空）", "InfoBrush");
+                    await System.Threading.Tasks.Task.Delay(80);
+
+                    RaiseRightClick(cell);
+                    await System.Threading.Tasks.Task.Delay(200);
+
+                    string got = "";
+                    try { if (Clipboard.ContainsText()) got = Clipboard.GetText(); } catch { }
+
+                    lines.Add("  期望值     : " + expect);
+                    lines.Add("  剪贴板     : " + (got.Length == 0 ? "(空)" : got));
+                    lines.Add("  逐字相同   : " + (got == expect ? "PASS" : "!! FAIL"));
+                    lines.Add("  状态栏     : " + TxtStatus.Text);
+                    lines.Add("  状态圆点色 : " + (ElpStatus.Fill as SolidColorBrush)?.Color
+                              + "   (OkBrush=#FF12A150  WarnBrush=#FFD9820A  ErrBrush=#FFE0484D)");
+                    lines.Add("");
+                }
+
+                // 反向断言：没有可复制语义的列，右键必须什么都不做
+                var cpuCell = cells.FirstOrDefault(c => (c.Column?.Header as string) == "CPU 利用率");
+                if (cpuCell != null)
+                {
+                    try { Clipboard.Clear(); } catch { }
+                    SetStatus("（自检前清空）", "InfoBrush");
+                    RaiseRightClick(cpuCell);
+                    await System.Threading.Tasks.Task.Delay(200);
+
+                    string gotCpu = "";
+                    try { if (Clipboard.ContainsText()) gotCpu = Clipboard.GetText(); } catch { }
+
+                    lines.Add("── 反向断言：右键「CPU 利用率」不该复制任何东西 ──");
+                    lines.Add("  剪贴板     : " + (gotCpu.Length == 0 ? "(空)" : gotCpu));
+                    lines.Add("  状态栏     : " + TxtStatus.Text);
+                    lines.Add("  保持无操作 : " + (gotCpu.Length == 0 && TxtStatus.Text == "（自检前清空）"
+                                              ? "PASS" : "!! FAIL"));
+                    lines.Add("");
+                }
+
+                lines.Add("注：空值（如未映射端口）走「这一行没有…可复制」分支，不写剪贴板。");
+            }
+        }
+        catch (Exception ex) { lines.Add("!! 异常: " + ex); }
+
+        try { File.WriteAllText(outPath, string.Join(Environment.NewLine, lines), new UTF8Encoding(false)); } catch { }
+    }
+
+    /// <summary>
+    /// 在单元格上真发一次右键。
+    ///
+    /// `MouseRightButtonUp` 是 **Direct 事件**：框架在路由上会**在每个 UIElement 上重发一次**它，
+    /// 单元格正是路由上的一环 —— 所以「在单元格上发一次」就等于真实点击时发生的那一步。
+    /// （曾经把处理器挂在 DataGrid 上、又只在 Border 上合成激发，三列全收不到 —— 不是产品坏，
+    ///   是这条 Direct 语义没搞清；见 XAML `CopyCell` 的注释。）
+    /// </summary>
+    private static void RaiseRightClick(DataGridCell cell)
+    {
+        cell.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+        {
+            RoutedEvent = UIElement.MouseRightButtonUpEvent,
+        });
     }
 
     private bool _exitRequested;
@@ -1020,15 +1174,16 @@ public partial class MainWindow : Window
     // ══════════════════════════ 容器 ══════════════════════════
     private async void OnRefreshContainersClick(object sender, RoutedEventArgs e) => await RefreshContainersAsync();
 
-    private void OnAllContainersChanged(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        _ = RefreshContainersAsync();
-    }
-
     private async System.Threading.Tasks.Task RefreshContainersAsync(bool silent = false)
     {
         if (!_ready) return;
+
+        // --demo 模式：列表里是构造出来的演示数据，**拒绝任何真实刷新覆盖它**。
+        // ⚠ 之前只 stop 了 _realtime 定时器，挡不住已经发出去的那次刷新 ——
+        //   `OnNavChanged` 里是 `_ = RefreshContainersAsync()`（fire-and-forget），
+        //   它会在下一次消息循环里落地并 Clear() 掉演示数据。
+        //   表现：--dump-layout（同步路径）能看到演示数据，--screenshot（会 await）看到的却是空列表。
+        if (_demoMode) return;
 
         if (!WslcService.Available)
         {
@@ -1036,8 +1191,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        bool all = ChkAllContainers.IsChecked == true;
-        var (items, raw) = await WslcService.ListContainersAsync(all);
+        // 恒含已停止的容器（`container ls --all`）。原先是「显示已停止」勾选项控制的，
+        // 去掉的原因：默认就是勾上的，取消勾选只会让列表凭空少几行，看起来像容器丢了。
+        var (items, raw) = await WslcService.ListContainersAsync(all: true);
         var (stats, _) = await WslcService.StatsOnceAsync();
 
         var statMap = new Dictionary<string, ContainerStats>(StringComparer.OrdinalIgnoreCase);
@@ -1052,6 +1208,12 @@ public partial class MainWindow : Window
 
         Ui(() =>
         {
+            // ⚠ 这里**必须再查一次**：上面那次入口检查只能拦住"还没开始"的刷新，
+            //   而本方法在两次 await 之间会挂起，等它醒来时 _demoMode 可能已经变成 true。
+            //   （实测：--demo 下演示数据曾被这次"迟到"的刷新清空，且 --dump-layout 走同步
+            //    路径反而看不出来 —— 一个典型的假绿。）
+            if (_demoMode) return;
+
             var selectedNames = new HashSet<string>(
                 _containers.Where(c => c.IsSelected).Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
             var keep = _selContainer?.Name;
@@ -1314,15 +1476,76 @@ public partial class MainWindow : Window
         return sb.ToString();
     }
 
-    /// <summary>名称列缩窄后，点一下弹完整名称并顺手复制，方便辨认长名字。</summary>
-    private void OnNameClick(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// 容器列表「右键复制」：按点到的**列**决定复制什么（容器名称 / 镜像 / 端口映射）。
+    ///
+    /// 处理器挂在**单元格**上（XAML 里 `CopyCell` 样式上的 EventSetter），所以 `sender`
+    /// 就是 DataGridCell —— 不用沿视觉树往上找，也就不依赖 `e.Source` / `e.OriginalSource`
+    /// 这类只在真实输入下才可靠的字段。
+    ///
+    /// ⚠ 别改挂到祖先 DataGrid 上：`MouseRightButtonUp` 是 **Direct 路由事件**（不是冒泡），
+    ///   它由框架在处理底层 `Mouse.MouseUp`（这个才冒泡）时，在路由上的**每个 UIElement
+    ///   上逐个重发**。挂在单元格上才与真实点击的路径一致（单元格正是路由上的一环）。
+    ///
+    /// 取的是**全量值**（Name / Image / Ports），不是列表里被 TextTrimming 截断的显示值 ——
+    /// 复制一串带省略号的文本没有意义。
+    /// </summary>
+    private void OnContainerCellRightClick(object sender, MouseButtonEventArgs e)
     {
-        var c = CtxC(sender);
-        if (c == null || string.IsNullOrWhiteSpace(c.Name)) return;
+        if (sender is not DataGridCell cell) return;
+        if (cell.DataContext is not ContainerInfo c) return;
 
-        try { Clipboard.SetText(c.Name); } catch { }
+        switch (cell.Column?.Header as string)
+        {
+            case "容器名称": CopyToClipboard(c.Name, "容器名称"); break;
+            case "镜像": CopyToClipboard(c.Image, "镜像"); break;
+            case "端口映射": CopyToClipboard(c.Ports, "端口映射"); break;
+            // 其余列（状态 / CPU / 内存 / 操作）没挂这个样式，右键保持无操作
+        }
+    }
 
-        AppDialog.Info(this, "容器完整名称", c.Name + "\n\n（已复制到剪贴板）");
+    /// <summary>
+    /// 写剪贴板 + 状态栏回执。
+    ///
+    /// 三件事不能省：① 空值不写剪贴板（否则会把「—」「（未映射端口）」这类占位符复制出去）；
+    /// ② 剪贴板被别的进程占住时 <c>SetText</c> 会抛 COMException，这是常态，重试几次再报错；
+    /// ③ 失败必须说出来，不能像原来那样 <c>catch { }</c> 吞掉 —— 用户以为复制成功了。
+    /// </summary>
+    private void CopyToClipboard(string value, string label)
+    {
+        var text = (value ?? "").Trim();
+        if (text.Length == 0)
+        {
+            SetStatus($"这一行没有{label}可复制", "WarnBrush");
+            return;
+        }
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                // copy:true —— 本程序退出后剪贴板内容仍然可用
+                Clipboard.SetDataObject(text, true);
+                SetStatus($"已复制{label}：" + ClipForStatus(text), "OkBrush");
+                return;
+            }
+            catch (Exception) when (attempt < 3)
+            {
+                System.Threading.Thread.Sleep(40);
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"复制{label}失败（剪贴板被占用）：{ex.Message}", "ErrBrush");
+                return;
+            }
+        }
+    }
+
+    /// <summary>状态栏回执里把超长值截成单行（完整值已经在剪贴板里了）。</summary>
+    private static string ClipForStatus(string s)
+    {
+        s = One(s);
+        return s.Length <= 48 ? s : s.Substring(0, 48) + "…";
     }
 
     private void OnOpenDetailClick(object sender, RoutedEventArgs e)
@@ -1463,6 +1686,7 @@ public partial class MainWindow : Window
     private async System.Threading.Tasks.Task RefreshImagesAsync(bool silent = false)
     {
         if (!_ready) return;
+        if (_demoMode) return;   // 同 RefreshContainersAsync：--demo 时不许被真实数据覆盖
         if (!WslcService.Available)
         {
             if (!silent) SetStatus("wslc 尚未安装，请先安装或升级 WSL", "WarnBrush");
@@ -1481,6 +1705,7 @@ public partial class MainWindow : Window
 
         Ui(() =>
         {
+            if (_demoMode) return;   // 同 RefreshContainersAsync：迟到的刷新不许覆盖演示数据
             _images.Clear();
             foreach (var i in items) _images.Add(i);
         });
@@ -1833,7 +2058,12 @@ public partial class MainWindow : Window
         else
         {
             Log("备份失败：" + One(r.StdErr), TxtImageLog);
-            SetStatus("备份失败", "ErrBrush");
+            // 导出失败时容器停着没被拉起 —— 这是工具改了用户容器的状态，必须明说，
+            // 否则用户只会看到「备份失败」，以为容器还好好跑着（静默的状态变化）。
+            if (wasRunning)
+                Log($"  ⚠ 容器 {name} 现在是**已停止**状态（导出要求先停，失败后没有自动恢复）——" +
+                    "需要的话点该行「启动」。", TxtImageLog);
+            SetStatus(wasRunning ? $"备份失败（容器 {name} 已停止，未自动恢复）" : "备份失败", "ErrBrush");
         }
     }
 
@@ -1898,84 +2128,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 按原配置重建容器：名称 / 启动命令 / 端口映射 / 环境变量 / 重启策略
+        // 按原配置重建容器：名称 / 启动命令 / 端口映射 / 环境变量
+        // ⚠ 解析**不在界面里做** —— 交给 RestorePlanner（纯函数，探针第 17 节直接喂真实
+        //   inspect JSON 断言）。早先这段写在这里、读的是 HostConfig.PortBindings，
+        //   而真实输出里端口映射在顶层 Ports，于是「按原配置恢复」一直静默丢端口
+        //   （2026-10-12 实测确认）。埋在点击回调里的代码没法自动验，这是它潜伏两版的原因。
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(meta);
-            var root = doc.RootElement;
+            var plan = RestorePlanner.FromInspectJson(meta, imageName,
+                n => _containers.Any(x => x.Name == n));
+            var spec = plan.Spec;
 
-            var spec = new ContainerSpec { Image = imageName, Detach = true };
-
-            string origName = null;
-            if (root.TryGetProperty("Name", out var nEl))
-                origName = (nEl.GetString() ?? "").TrimStart('/');
-            if (string.IsNullOrWhiteSpace(origName))
-                origName = imageName.Split(':')[0].Split('/').Last() + "-restored";
-            if (_containers.Any(x => x.Name == origName))
-                origName = origName + "-restored";
-            spec.Name = origName;
-
-            var cmdSb = new System.Text.StringBuilder();
-            if (root.TryGetProperty("Config", out var cfg))
-            {
-                if (cfg.TryGetProperty("Cmd", out var cmdEl) && cmdEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    foreach (var t in cmdEl.EnumerateArray())
-                    {
-                        var tok = t.GetString() ?? "";
-                        if (tok.Length == 0) continue;
-                        if (cmdSb.Length > 0) cmdSb.Append(' ');
-                        if (tok.Contains(' ') || tok.Contains('"'))
-                            cmdSb.Append('"').Append(tok.Replace("\"", "\\\"")).Append('"');
-                        else cmdSb.Append(tok);
-                    }
-                }
-                if (cfg.TryGetProperty("Env", out var envEl) && envEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    foreach (var e2 in envEl.EnumerateArray())
-                    {
-                        var kv = e2.GetString() ?? "";
-                        var i = kv.IndexOf('=');
-                        if (i > 0)
-                            spec.Env.Add(new ContainerSpec.EnvVar { Key = kv[..i], Value = kv[(i + 1)..] });
-                    }
-                }
-            }
-            spec.Command = cmdSb.ToString();
-
-            // ⚠ wslc run 没有 --restart 选项（2026-10-10 实测报「选项名称未被识别」），
-            //   所以元数据里的重启策略只能记录、不能下发 —— 恢复后需手动处理。
-            if (root.TryGetProperty("HostConfig", out var hc))
-            {
-                if (hc.TryGetProperty("PortBindings", out var pb) && pb.ValueKind == System.Text.Json.JsonValueKind.Object)
-                {
-                    foreach (var kp in pb.EnumerateObject())
-                    {
-                        var cp = kp.Name.Split('/')[0];
-                        var proto = kp.Name.EndsWith("/udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "";
-                        foreach (var b in kp.Value.EnumerateArray())
-                        {
-                            var host = b.TryGetProperty("HostPort", out var hp) ? (hp.GetString() ?? "") : "";
-                            spec.Ports.Add(new ContainerSpec.PortMap
-                            { HostPort = host, ContainerPort = cp, Protocol = proto });
-                            break;
-                        }
-                    }
-                }
-                if (hc.TryGetProperty("RestartPolicy", out var rpEl) &&
-                    rpEl.TryGetProperty("Name", out var nmEl))
-                {
-                    var rp = nmEl.GetString() ?? "";
-                    // wslc run 无 --restart 选项，只记录不下发
-                    if (rp.Length > 0 && rp != "no")
-                        Log($"  ⚠ 原容器重启策略为 {rp}，但 wslc run 暂不支持 --restart，恢复后未应用（容器不会开机自启）。", TxtImageLog);
-                    spec.RestartPolicy = rp;
-                }
-            }
+            foreach (var note in plan.Notes) Log("  ⚠ " + note, TxtImageLog);
 
             Log($"按原配置重建容器 {spec.Name}：命令「{spec.Command}」、" +
                 $"端口 {spec.Ports.Count} 条、环境变量 {spec.Env.Count} 条" +
-                (spec.RestartPolicy.Length > 0 ? $"、重启策略 {spec.RestartPolicy}" : ""), TxtImageLog);
+                (spec.Ports.Count > 0
+                    ? $"（{string.Join("、", spec.Ports.Select(p => p.Text))}）"
+                    : ""),
+                TxtImageLog);
+            if (plan.RestartPolicy.Length > 0)
+                Log($"  备份里的重启策略：{plan.RestartPolicy}（wslc run 不支持 --restart，未下发）",
+                    TxtImageLog);
 
             var run = await WslcService.RunAsync(spec, s2 => Log(s2, TxtImageLog));
             if (run.Success)
@@ -2008,10 +2182,11 @@ public partial class MainWindow : Window
     private async void OnRebuildSessionClick(object sender, RoutedEventArgs e)
     {
         // 查 vhdx 会触发 GetStorageDir（可能同步跑 wslc info），放后台
-        var (vhdx, diskBytes) = await System.Threading.Tasks.Task.Run(() =>
+        var (vhdx, diskBytes, delTarget) = await System.Threading.Tasks.Task.Run(() =>
         {
             var v = WSLCManager.Helpers.DiskCompactor.FindStorageVhdx();
-            return (v, v == null ? -1 : WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(v));
+            return (v, v == null ? -1 : WSLCManager.Helpers.DiskCompactor.GetVhdxBytes(v),
+                    SessionDeleteTarget());
         });
         string diskLine;
         if (diskBytes >= 0)
@@ -2026,6 +2201,8 @@ public partial class MainWindow : Window
 
         var msg = "将终止 wslc 会话并删除其虚拟磁盘（storage.vhdx），\n" +
                   "下次使用时自动重建一个全新的空会话。\n\n" +
+                  $"将被删除的目录：{delTarget}\n" +
+                  "（同级目录下的 wslc 全局设置文件 settings.yaml **不在**删除范围内，会保留）\n\n" +
                   $"当前会话下有 {_containers.Count} 个容器、{_images.Count} 个镜像，**全部会被清空**。\n" +
                   "虚拟磁盘内的数据删除后不可恢复 —— 如需保留请先「备份容器」。\n" +
                   diskLine +
@@ -2048,7 +2225,7 @@ public partial class MainWindow : Window
         await System.Threading.Tasks.Task.Delay(1500);   // 留时间让句柄完全释放
 
         // 3) 删除会话目录（虚拟磁盘与全部数据），带重试 —— 句柄释放可能有延迟
-        var dir = WslcService.GetStorageDir();
+        var dir = delTarget;
         if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
         {
             bool deleted = false;
@@ -2089,6 +2266,24 @@ public partial class MainWindow : Window
 
         SetBusy(false);
         SetStatus("会话已重建（全部容器与镜像已清空）", "OkBrush");
+    }
+
+    /// <summary>
+    /// 「重建会话」实际要删除的目录。
+    ///
+    /// **只删 <c>sessions</c> 子目录，不碰同级的 settings.yaml。**
+    /// ⚠ 早先删的是 <c>GetStorageDir()</c> 自身（实测为 <c>%LOCALAPPDATA%\wslc</c>），
+    /// 那会把 wslc 的全局设置文件 <c>settings.yaml</c> 一并删掉
+    /// （cpuCount / memorySize / storagePath / credentialStore 全丢），
+    /// 而确认框只承诺「清空容器与镜像」—— 删除范围大于说明，属于静默扩大破坏面。
+    /// 目录结构（2026-10-12 实测）：
+    ///   %LOCALAPPDATA%\wslc\{settings.yaml, sessions\wslc-cli-&lt;用户&gt;\storage.vhdx}
+    /// </summary>
+    private static string SessionDeleteTarget()
+    {
+        var root = WslcService.GetStorageDir();
+        var sessions = Path.Combine(root, "sessions");
+        return Directory.Exists(sessions) ? sessions : root;
     }
 
     /// <summary>WinForms 文件对话框的属主窗口包装（WPF Window 不是 IWin32Window）。</summary>

@@ -6,6 +6,8 @@
 
 WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），单文件绿色版。
 
+**下载** → [最新版本 · Releases](https://github.com/cjx2022/WSLCManager/releases/latest)：单文件 exe（约 0.7 MB），双击即用。也可[自行编译](#开发)。
+
 > **非官方工具**：本项目是独立第三方实现，与微软及任何镜像服务商**均无隶属或背书关系**。
 > `WSL` / `wslc` 是微软的产品；本工具只是调用它们的命令行接口。
 
@@ -22,11 +24,29 @@ WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），
 | 模块 | 能力 |
 |---|---|
 | **环境与安装** | 检测 WSL / wslc 环境与版本；**安装**（`wsl --install`）/ 更新稳定版 / 更新预览版；从官方安装包静默安装；跳转 Store / 官方发布页；执行日志 |
-| **容器管理** | 列表（含已停止）**行内直接显示 CPU / 内存利用率**；行内操作：启动 / 停止 / 重启 / 日志 / 终端（shell 可选） / 详情 / 删除；**勾选多选 → 批量启动 / 停止 / 重启 / 删除**；可视化新建容器 |
+| **容器管理** | 列表**恒含已停止容器**（没有开关去切换），**行内直接显示 CPU / 内存利用率与端口映射**；行内操作：启动 / 停止 / 重启 / 日志 / 终端（shell 可选） / 详情 / 删除；**勾选多选 → 批量启动 / 停止 / 重启 / 删除**；可视化新建容器；**单元格右键复制**（容器名称 / 镜像 / 端口映射） |
 | **容器详情卡片** | 点「详情」或直接点 CPU / 内存单元格：实时性能（2 秒自刷新）+ 基本信息（含 IP / 网关）+ 配置详情(JSON) / 运行日志 |
-| **镜像管理** | **本地索引检索**（见下方说明）+ 本地镜像列表每行带「删除」；拉取（支持自填加速前缀，失败自动回退官方源）；**标注镜像被哪些容器占用** |
+| **镜像管理** | **本地索引检索**（见下方说明）+ 本地镜像列表每行带「删除」；拉取（支持自填加速前缀，失败自动回退官方源，**可中途停止**并显示实时速率）；**标注镜像被哪些容器占用** |
+| **备份与清理** | 容器 → `tar` 存档（自动先停、完事恢复运行）+ 配置元数据（`inspect` 原文，恢复时**按原配置**重建：启动命令 / 端口映射 / 环境变量）；`tar` → 镜像导入 + 自动重建容器；**重建会话**（只删 `sessions` 子目录，保留同级的 `settings.yaml`）；**压缩虚拟磁盘**（`diskpart compact`，需 UAC，按真实输出判定成败） |
 | **设置与加速** | 加速前缀（保存即生效，无需重启）、加速地址连通性实测、镜像索引导入导出、重启应用、打开配置目录 |
 | **系统托盘** | 点关闭按钮**最小化到托盘**（不退出），托盘双击恢复，右键菜单可退出 |
+
+### 列表里复制信息（右键）
+
+容器列表的**容器名称 / 镜像 / 端口映射**三列支持右键复制，成功与否走状态栏静默回执：
+
+| 列 | 右键复制到的内容 |
+|---|---|
+| 容器名称 | `nginx-gateway` |
+| 镜像 | `library/nginx:stable` |
+| 端口映射 | `80:80,443:443` |
+
+- 复制的是**数据原值**，不是列表里为排版截断过的显示值 —— 上面三例在界面上分别显示为
+  `nginx-gate…`、`nginx:stable`、`80:80 等 2 项`，复制一串带省略号的文本没有意义。
+- 空值不写剪贴板（例如没有端口映射的行，状态栏提示「这一行没有端口映射可复制」）。
+- 剪贴板被别的程序占用时**重试 3 次再报错**，不会静默失败（旧写法 `catch { }` 把异常吞掉，
+  用户会以为复制成功了）。
+- 其余列（状态 / CPU / 内存 / 操作）没有可复制的语义，右键保持无操作。
 
 ### 容器状态语义
 
@@ -40,31 +60,20 @@ WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），
 > （容器内进程不响应 SIGTERM，被 SIGKILL 强杀），和 `container kill` 完全一样。
 > 所以 130(SIGINT) / 137(SIGKILL) / 143(SIGTERM) 一律按「正常停止」处理，只有其它非 0 码才算异常。
 
-### 启动：`exit=0` 不等于容器跑起来了
+### 启动之后为什么可能立刻变成「已停止」
 
-`wslc container start` 的 `exit=0` 只代表**启动请求被接受**，不代表容器还在跑 ——
-容器的主进程一结束它就停止，而命令**照样返回 0**。实测（2026-10-10，WSL 3.0.1.0）：
+`wslc container start` 返回成功，只代表**启动请求被接受**，不代表容器还在跑 ——
+容器在**主进程结束**时就停止，而命令照样返回成功。
 
-```
-$ wslc container start vast_alaska          # 该容器 Cmd = ["/bin/sh"]，没加 -i -t
-vast_alaska
-exit=0                                       # 指令成功
-$ wslc ps -a
-… Exited (0) Less than a second ago  vast_alaska
-$ wslc inspect vast_alaska -f json
-"StartedAt":"…19:03:45.630847468Z","FinishedAt":"…19:03:45.632935313Z"   # 只活了 2 毫秒
-```
+本工具不会把这种「指令成功」直接报成「启动成功」：
 
-**所以「启动成功」这种结论只能靠复查得出，不能靠退出码。** 本工具的做法：
-
-- 点「启动」/「重启」后，等 350 ms 再 `inspect` 复查真实运行态，不通过最多再补两次（总上限约 1.1 秒）；
+- 点「启动」/「重启」后会复查真实运行态；
 - 指令成功但容器没在跑 → 状态栏报**「容器随即退出（退出码 N）」**（橙色），
-  执行输出里给出**当前启动命令**和怎么改，而不是笼统报「启动成功」；
-- `wslc run -d` 创建容器后同样复查（容器名优先，没起名就从输出里抓它打印的容器 ID）；
-- 复查**问不到**（wslc 不可用 / 输出解析不了）时**放弃判断**，绝不误报「起后即退」。
+  执行输出里给出**当前的启动命令**以及怎么改；
+- 复查**问不到**（wslc 不可用 / 输出解析不了）时**放弃判断**，不误报。
 
-为什么 `sleep infinity` 能常驻、`/bin/sh` 不能：容器在**主进程结束时**就停止。
-交互式 shell 没有终端时会立刻读到 EOF 退出；勾选「分配终端（-i -t）」或换成不会自己结束的命令即可。
+最常见的「起完就退」是交互式 shell：`/bin/sh` 没有终端时会立刻读到 EOF 退出。
+勾选「分配终端（-i -t）」，或换成不会自己结束的命令（如 `sleep infinity`）即可常驻。
 
 ### 停止 vs 强制终止
 
@@ -105,19 +114,16 @@ MirrorPresets=docker.m.daocloud.io,hub.rat.dev ← 逗号分隔；写 none 表�
 > 副作用是测完 `alpine:latest` 会留在本地镜像列表里，不需要可到镜像页删掉。
 > 检测范围 = 输入框里当前填写的地址 + `MirrorPresets` 里的全部预设。
 
-#### ⚠ 「连通 ≠ 能拉」——官方镜像必须带 `library/`
+#### 官方镜像要补 `library/`
 
-**这是本项目踩过的一个真坑（2026-10）**：镜像站的首页 / `/v2/` 能连上，不代表拉取能成。
+镜像站的首页 / `/v2/` 能连上，**不代表拉取能成**：
 
 - Docker Hub 官方镜像（`alpine` / `nginx` / `redis` …）的**规范全名是 `library/<名>`**。
-  `docker pull alpine` 能成功，是因为官方客户端替你补了 `library/`。
-- 换成第三方加速前缀后，这个 `library/` **要由调用方自己补**。多数镜像站对
-  `<前缀>/hello-world:latest`（裸名）直接返回 `denied`，对 `<前缀>/library/hello-world:latest`
-  才肯转发。
-- 修复前，本工具的「检测加速地址可用性」写的是 `<前缀>/library/alpine`，
-  而「拉取镜像」拼的是 `<前缀>/<镜像名>` —— **两边不一致**，于是出现
-  「检测说地址可用、点拉取却报 denied」。现在两条路径都走同一个
-  `WslcService.PullCandidates()`，不会再漂移。
+  `docker pull alpine` 能成功，是因为官方客户端替你补了 `library/`；换成第三方加速前缀后，
+  这个 `library/` **要由调用方自己补**。多数镜像站对 `<前缀>/hello-world:latest`（裸名）
+  直接返回 `denied`，对 `<前缀>/library/hello-world:latest` 才肯转发。
+- 本工具的「检测加速地址可用性」与「拉取镜像」走**同一套拼接规则**，
+  不会出现「检测说地址可用、点拉取却报 denied」。
 
 拉取时的候选顺序（只有官方镜像才有多候选）：
 
@@ -203,9 +209,9 @@ jc21/xxx:latest →  <前缀>/jc21/xxx:latest         ← 用户命名空间，�
 而未发布端口时列表里的「端口」列是空的，看起来才像「没有地址」。
 只做出网客户端（拉数据、跑任务）可以不填；要对外提供服务就必填。
 
-### 镜像删除：exit=0 不等于删掉了
+### 删除镜像的语义：可能只摘掉标签
 
-`wslc image rm` 删除**被容器引用**的镜像时**不报错**，实测（WSL 3.0.1.0）：
+`wslc image rm` 删除**被容器引用**的镜像时**不报错**：
 
 | 情形 | 输出 | 真实结果 |
 |---|---|---|
@@ -357,10 +363,10 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 # 编译
 dotnet build -c Release
 
-# 服务层探针（不需要界面，直接验证 CLI 解析）—— 15 节自检
+# 服务层探针（不需要界面，直接验证 CLI 解析）—— 21 节自检
 dotnet run --project _probe
 
-# 发布单文件（框架依赖，约 8MB）
+# 发布单文件（框架依赖，约 0.7MB）
 dotnet publish -c Release -r win-x64 \
   -p:PublishSingleFile=true -p:PublishSelfContained=false -p:EnableCompressionInSingleFile=false
 
@@ -375,13 +381,16 @@ WSLCManager/
 ├── Models/        ContainerInfo / ImageInfo / ImageUsage / ContainerStats / ContainerSpec
 ├── Services/      ProcRunner（进程封装 + 自适应解码）/ TableParser（表格与 NDJSON 解析）
 │                  WslcService（业务）/ InstallService（环境安装检测）
+│                  RestorePlanner（备份元数据 → 容器规格，纯函数，探针可直接喂真实 JSON 断言）
 │                  ImageSearchService（本地索引检索）/ DownloadProbe（wsl --update 进度旁路）
 ├── Helpers/       ChromeHelper（无边框窗口）/ AppSettings / TextQuality（DPI 自适应排版）
+│                  DiskCompactor（diskpart compact + 真假成功判定）/ NetMeter（拉取速率采样）
 │                  MemoryTrimmer / Converters / TrayIcon / NativeMethods
-├── Dialogs/       CreateContainerDialog / ContainerDetailDialog / ContainerLogsDialog / TerminalDialog
+├── Dialogs/       AppDialog / CreateContainerDialog / ContainerDetailDialog
+│                  ContainerLogsDialog / TerminalDialog
 ├── Themes/        Styles.xaml
 ├── Assets/        logo.png（应用内 logo）
-├── _probe/        服务层探针控制台（15 节自检，直接复用主项目源码）
+├── _probe/        服务层探针控制台（21 节自检，直接复用主项目源码）
 ├── _tools/        make_logo.py（品牌图形生成）/ screengrab.py（真实屏幕抓取，验收用）
 ├── LICENSE        MIT
 └── app.ico / app.manifest
@@ -390,26 +399,28 @@ WSLCManager/
 ### 调试参数
 
 ```
-WSLCManager.exe --page=env|container|image|settings   直接打开指定页
+WSLCManager.exe --page=env|container|image|backup|settings 直接打开指定页
 WSLCManager.exe --size=WxH                            指定窗口尺寸（含最小宽度下的表现）
 WSLCManager.exe --search=关键字                       启动即检索一次（验收用）
-WSLCManager.exe --dialog=create|detail|logs|terminal  直接打开对应对话框
+WSLCManager.exe --dialog=create|detail|logs|terminal|confirm|info  直接打开对应对话框
 WSLCManager.exe --pick-custom                         配合 --dialog=terminal：切到「自定义命令」分支
+WSLCManager.exe --demo                                清掉真实数据换成纯演示数据（对外截图/文档配图用）
+WSLCManager.exe --fill-demo                           往镜像页两个输入框填长演示文本（核对排版）
 WSLCManager.exe --stress=N                            灌 N 行假数据把列表撑出滚动条（纯内存）
 WSLCManager.exe --screenshot=<路径> [--exit-after-shot]  把窗口渲染成 PNG 后退出
 WSLCManager.exe --dump-layout=<路径> [--exit-after-shot] 导出关键控件的真实布局矩形（文本）
 WSLCManager.exe --click-start=<容器名> [--dump-ui=<路径>] 在真实界面上点一次该行的「启动」，导出界面文案
+WSLCManager.exe --right-copy=<容器名> [--dump-ui=<路径>] 对该行三列各发一次真实右键，断言剪贴板内容与状态栏
 WSLCManager.exe --grab                                配合 --screenshot：连 DWM 非客户区一起抓
 WSLCManager.exe --software                            强制软件渲染（低配/远程桌面场景）
 WSLCManager.exe --textmode=display|ideal              强制指定文字排版模式（排查字体发虚用）
 ```
 
-> `--dump-layout` / `--screenshot` 这类验收参数一律配 `--exit-after-shot` 才能自动退出；
-> 该开关是幂等的，两条路径都收口在 `ExitIfRequested()`。
+> `--dump-layout` / `--screenshot` 这类验收参数一律配 `--exit-after-shot` 才能自动退出。
 >
-> `--click-start` 走的是**真实 UI 路径**（在视觉树里找到该行的「启动」按钮并触发 Click，
-> 与用户手点完全同一条代码路径），导出状态栏文本 / 状态圆点色 / 执行输出 / 列表状态。
-> 需要「按钮文案对不对」这类结论时用它 —— 只调服务层证明不了界面文案。
+> `--click-start` / `--right-copy` 走的是**真实 UI 路径**（在视觉树里定位该行的按钮 / 单元格并触发，
+> 与用户手点同一条代码路径），导出状态栏文本 / 状态圆点色 / 执行输出 / 列表状态。
+> 需要「文案对不对」这类结论时用它 —— 只调服务层证明不了界面。
 
 ## 常见问题
 
@@ -425,60 +436,24 @@ WSLCManager.exe --textmode=display|ideal              强制指定文字排版�
 - **换了图标但资源管理器里没变** → Windows 图标缓存问题，执行 `ie4uinit.exe -show` 或重启资源管理器。
 - **关不掉程序** → 点关闭是**最小化到托盘**；要退出请右键托盘图标选「退出」。
 
-## 实测记录（wslc 3.0.1.0 / WSL 3.0.1.0）
-
-下面是开发过程中在真机上验证出来的事实，代码按这些结论实现：
-
-1. **列表命令支持 `--format json`，且输出是 NDJSON**（每行一个对象，不是 JSON 数组）。
-   本工具一律**优先走 JSON**，仅在其失败时回退到表格解析 —— 表格解析要面对列宽截断、
-   中英表头混排（实测容器列表表头是中文、镜像列表表头是英文）、值内含空格等问题，不可靠。
-2. **`wslc stats` 本身就是「快照」语义**（输出一次即退出），**没有 `--no-stream` 选项**，
-   传了会直接报「选项名称未被识别」。
-3. **不存在 `wslc container pause` / `unpause`**。容器子命令为
-   `attach / cp / create / exec / export / inspect / kill / logs / list / prune / …`。
-4. `container ls` 的别名有 `container list` / `container ps` / `list` / `ls` / `ps`。
-5. 容器状态串为英文，如 `Up About a minute`、`Exited (137) Less than a second ago`；
-   JSON 里另有精确的 `State` 字段（`running` / `exited`…）。
-6. **`msiexec` 提权安装时，安装包若位于非系统盘（如 `D:\`）会立即失败**，
-   日志显示 `MainEngineThread is returning 2`。本工具会先把安装包复制到本机临时目录再安装。
-7. **`wslc inspect -f` 只支持 `json`，不支持 Go 模板** —— 传
-   `{{.NetworkSettings.IPAddress}}` 会报「不是可识别的格式类型」（可用格式类型：json）。
-   容器 IP / 网关取自 `NetworkSettings.<网络名>.IPAddress` / `.Gateway`。
-8. **`wslc exec` 的退出码不可信**：`sh -c '… && echo x'` 里最后一次判断失败时退出码就是 1，
-   但输出正常。判读探测/脚本类输出要**看内容，不看退出码**。
-9. 容器里有没有 shell 由镜像决定：实测 `nginx:latest`（debian 系）有 `bash` / `sh` / `dash`；
-   alpine 系只有 busybox 提供的 `sh`；极简镜像可能一个都没有。
-10. **`wslc image rm` 不带 `-f` 也返回 exit=0，但只摘标签**（被容器引用时镜像层不删）。
-11. **`wslc container start` / `wslc run -d` 的 exit=0 只代表指令被接受**。`Cmd=["/bin/sh"]`
-    且没加 `-i -t` 的容器 start 后只活了 **2 毫秒**（`StartedAt 19:03:45.630847Z` →
-    `FinishedAt 19:03:45.632935Z`），命令仍返回 0 并打印容器名；换成 `sleep 300` 则稳定 `Up`。
-    → 「启动成功」必须靠 `inspect` 复查运行态得出（见「启动：exit=0 不等于容器跑起来了」）。
-
-## 已实现的工程要点
-
-- **输出编码自适应**：`wsl.exe` / `wslc.exe` 在中文系统下可能输出 UTF-8、UTF-16LE 或带 BOM，
-  统一按原始字节读取后自适应解码（BOM → NUL 奇偶分布判 UTF-16LE → 严格 UTF-8 → GBK/宽松 UTF-8
-  按可读性打分选优），避免中文乱码。
-- **JSON 优先 + 表格回退**，且表格解析不依赖固定列宽（用表头定位各列起始偏移再切片），
-  中英文表头都认。
-- **命令回退**：`container ls` / `container list` / `container ps` 依次尝试，兼容版本差异。
-- **加速地址单一来源**：加速前缀的拼接只有 `WslcService.PullCandidates()` 一处实现，
-  「检测加速地址可用性」与「拉取镜像」都调它。此前两处各写一份，才出现
-  「检测说可用、点拉取却 denied」（见「镜像加速前缀」节）。
-- **行分割线只在一处定义**：两个列表的横线来自共享样式 `ModernDataGrid`
-  （`GridLinesVisibility=Horizontal` + `BorderSoftBrush #E7EBF2`）。
-  ⚠ 控件上的局部属性优先级高于样式，所以在页面里写 `GridLinesVisibility="None"`
-  会把分割线整条抹掉 —— 要调就改 `ModernDataGrid`。
-- **文字渲染按 DPI 自适应**：`TextFormattingMode` 不再写死在 XAML 上，改由
-  `Helpers/TextQuality.cs` 按显示器 DPI 选（≈100% 用 `Display`、>100% 用 `Ideal`），
-  并在 `DpiChanged` 时重算；**分层窗口（`AllowsTransparency=True`）必须靠
-  `RenderOptions.ClearTypeHint` 才能找回 ClearType**，弹窗与下拉都按此处理。
-- **验收参数必须能自行退出**：`--exit-after-shot` 原先只在截图分支里判断，
-  只带 `--dump-layout` 不带 `--screenshot` 时会一直挂着不退（已改为幂等的
-  `ExitIfRequested()`，两条路径都收口）。
-
 ## 后续规划
 
 - 容器编排（多容器一键起停、compose 风格描述文件）
 - 镜像构建（`wslc build`）可视化
 - 容器资源限制（CPU / 内存配额）配置项
+
+## 更新日志
+
+### v0.9.1（2026-10-12）
+
+- **新功能**：容器列表**单元格右键复制** —— 容器名称 / 镜像 / 端口映射，复制的是全量值。
+- **修复**：按原配置恢复容器时**端口映射不再丢失**（此前恢复出的容器会丢掉 `-p` 映射）。
+- **修复**：压缩虚拟磁盘的**成败判定**不再误报成功。
+- **修复**：备份导出失败时，被停下的容器会明确提示当前状态与恢复方式。
+- **修复**：以 `--demo` 启动演示模式时，列表不再被后台刷新清空。
+- **改进**：容器列表**恒含已停止容器**，「显示已停止」勾选框已移除。
+- **改进**：「重建会话」只清空容器与镜像，不再动 wslc 的全局设置；确认框写明实际删除的目录。
+
+### v0.9.0（2026-10-10）
+
+首个公开版本：环境与安装 / 容器管理 / 镜像管理 / 容器详情 / 内置终端 / 系统托盘 / PerMonitorV2 高 DPI。

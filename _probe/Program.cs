@@ -394,6 +394,185 @@ try
           $"{(sr.Success ? "PASS（exit=0 已知，判定改由复查给出）" : "参考：本次 start 本身就非 0")}");
     }
 
+    // ══ 17. 备份元数据 → 重建容器 的解析 ══
+    // 这一节存在的理由：这套解析原先长在界面点击回调里，只能靠人手点一次弹窗才验得到，
+    // 于是字段名猜错了两版都没人发现 —— **真实 inspect 输出里端口映射在顶层 `Ports`**，
+    // `HostConfig` 下根本没有 `PortBindings`，导致「按原配置恢复」恢复出来的容器永远丢端口。
+    int s17pass = 0, s17fail = 0;
+    void A17(string label, bool ok)
+    {
+        if (ok) s17pass++; else s17fail++;
+        W($"  断言 {label,-38}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    Sec("17. 备份元数据解析（按原配置恢复容器）");
+
+    // 下面是 2026-10-12 `wslc inspect wslcm_bugcheck -f json` 抓到的**逐字**输出，只是压成一行。
+    const string realInspect = """[{"Config":{"Cmd":["sleep","60"],"Entrypoint":null,"Env":["FOO=bar","PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],"Healthcheck":null,"Image":"docker.1ms.run/library/alpine:latest","Labels":{},"StopTimeout":null,"User":"","WorkingDir":"/"},"Created":"2026-10-12T11:18:55.670168447Z","HostConfig":{"Memory":0,"NanoCpus":0,"NetworkMode":"bridge","Ulimits":[]},"Id":"a11d89d8e0329460edc6a60b05075ce12b40563bdddab6ff8593e06bb0a500ec","Image":"sha256:320994c3b997e2ec6433f717f153e108023c5bec8fefa8d76b83451d16d05ea8","Labels":{},"Mounts":[],"Name":"/wslcm_bugcheck","NetworkSettings":{"Networks":{"bridge":{"Aliases":[],"DriverOpts":{},"Gateway":"172.17.0.1","IPAMConfig":null,"IPAddress":"172.17.0.2","IPPrefixLen":16,"Links":[],"MacAddress":"02:42:ac:11:00:02"}}},"Ports":{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"18080"}]},"State":{"ExitCode":0,"FinishedAt":"0001-01-01T00:00:00Z","Health":null,"Running":true,"StartedAt":"2026-10-12T11:18:55.971368418Z","Status":"running"}}]""";
+
+    var plan = RestorePlanner.FromInspectJson(realInspect, "bugcheck:restored", _ => false);
+    A17("名称取自 Name（去掉前导 /）", plan.Spec.Name == "wslcm_bugcheck");
+    A17("启动命令拼回 \"sleep 60\"", plan.Spec.Command == "sleep 60");
+    A17("环境变量含 FOO=bar", plan.Spec.Env.Any(e => e.Key == "FOO" && e.Value == "bar"));
+    A17("端口映射 1 条", plan.Spec.Ports.Count == 1);
+    A17("端口 = 宿主 18080 → 容器 80", plan.Spec.Ports.Count == 1 &&
+        plan.Spec.Ports[0].HostPort == "18080" && plan.Spec.Ports[0].ContainerPort == "80");
+    A17("下发参数里带 -p 18080:80", plan.Spec.ToArgs().Contains("18080:80"));
+    A17("镜像用调用方给的重建镜像", plan.Spec.Image == "bugcheck:restored");
+
+    // 把根因固化成断言：真实输出里 HostConfig 下**没有** PortBindings
+    using (var probeDoc = System.Text.Json.JsonDocument.Parse(realInspect))
+    {
+        var root0 = probeDoc.RootElement[0];
+        var hc0 = root0.GetProperty("HostConfig");
+        A17("HostConfig 下没有 PortBindings（旧假设位置）", !hc0.TryGetProperty("PortBindings", out _));
+        A17("顶层 Ports 存在（真实位置）", root0.TryGetProperty("Ports", out _));
+    }
+
+    // 名字冲突 → 自动加后缀；无启动命令 → 必须给出提醒
+    var planDup = RestorePlanner.FromInspectJson(realInspect, "bugcheck:restored",
+        n => n == "wslcm_bugcheck");
+    A17("名字被占用时加 -restored", planDup.Spec.Name == "wslcm_bugcheck-restored");
+    var planEmpty = RestorePlanner.FromInspectJson("""{"Name":"/x","Config":{"Cmd":[]}}""", "empty:1");
+    A17("无启动命令时给出提醒", planEmpty.Notes.Count > 0);
+    A17("无端口时不虚构映射", planEmpty.Spec.Ports.Count == 0);
+
+    W($"  第 17 节小结: {s17pass} PASS / {s17fail} FAIL");
+
+    // ══ 17b. 虚拟磁盘压缩的「真假成功」判定 ══
+    // 背景：diskpart 脚本是顺序执行的，`compact vdisk` 失败**不会**中断脚本，
+    // 后面的 `detach vdisk` 照旧成功并写下「已成功分离虚拟磁盘文件」。
+    // 于是 `exit==0 && 含"successfully" || 含"成功"` 这种写法会把 detach 的成功
+    // 当成 compact 的成功 —— 界面弹「压缩完成，无碎片可回收」，实际什么都没压。
+    Sec("17b. 虚拟磁盘压缩的「真假成功」判定（假成功回归）");
+    int s17bpass = 0, s17bfail = 0;
+    void A17b(string label, bool ok)
+    {
+        if (ok) s17bpass++; else s17bfail++;
+        W($"  断言 {label,-38}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    // 真实成功时的输出（diskpart 中文界面；命令回显 + 结果逐行）
+    const string compactOk = """
+        在计算机上: WSLC-BOX
+
+        DISKPART> select vdisk file="C:\Users\x\AppData\Local\wslc\sessions\wslc-cli-x\storage.vhdx"
+
+        已成功选择虚拟磁盘文件。
+
+        DISKPART> attach vdisk readonly
+
+          100 百分比已完成
+
+        已成功连接虚拟磁盘文件。
+
+        DISKPART> compact vdisk
+
+          100 百分比已完成
+
+        DiskPart 已成功压缩虚拟磁盘文件。
+
+        DISKPART> detach vdisk
+
+        已成功分离虚拟磁盘文件。
+
+        DISKPART> exit
+        """;
+
+    // 失败时的输出：compact 报错，但脚本继续、detach 依旧「成功」
+    const string compactFail = """
+        在计算机上: WSLC-BOX
+
+        DISKPART> select vdisk file="C:\Users\x\AppData\Local\wslc\sessions\wslc-cli-x\storage.vhdx"
+
+        已成功选择虚拟磁盘文件。
+
+        DISKPART> attach vdisk readonly
+
+        已成功连接虚拟磁盘文件。
+
+        DISKPART> compact vdisk
+
+        DiskPart 遇到错误: 介质受写入保护。
+        有关详细信息，请参阅系统事件日志。
+
+        DISKPART> detach vdisk
+
+        已成功分离虚拟磁盘文件。
+
+        DISKPART> exit
+        """;
+
+    var jOk = WSLCManager.Helpers.DiskCompactor.JudgeCompact(0, compactOk);
+    A17b("正常成功 → 判成功", jOk.Ok);
+
+    var jFail = WSLCManager.Helpers.DiskCompactor.JudgeCompact(0, compactFail);
+    A17b("compact 报错但 detach 成功 → 判**失败**", !jFail.Ok);
+    A17b("失败原因指向「错误」", jFail.Why.Contains("错误"));
+
+    // 旧写法在这里会判成成功 —— 把这一点也固化下来，防止有人改回去
+    var oldWay = compactFail.Contains("成功");
+    A17b("旧写法（含「成功」即算过）会误判", oldWay);
+
+    A17b("空输出 → 判失败，不猜", !WSLCManager.Helpers.DiskCompactor.JudgeCompact(0, "").Ok);
+    A17b("英文 success 也认", WSLCManager.Helpers.DiskCompactor.JudgeCompact(0,
+        "select vdisk file=\"x\"\ncompact vdisk\n100 percent completed\nDiskPart successfully compacted the virtual disk file.").Ok);
+    A17b("非 0 返回码 → 判失败", !WSLCManager.Helpers.DiskCompactor.JudgeCompact(1, compactOk).Ok);
+
+    W($"  第 17b 节小结: {s17bpass} PASS / {s17bfail} FAIL");
+
+    // ══ 18 / 19 ══
+    Sec("18. 网络速率采样（NetMeter）");
+    {
+        var a = WSLCManager.Helpers.NetMeter.TotalBytesReceived();
+        W($"  t0 累计接收: {a} bytes ({WSLCManager.Helpers.NetMeter.Human(a)})");
+        await Task.Delay(3000);
+        var b = WSLCManager.Helpers.NetMeter.TotalBytesReceived();
+        W($"  t3 累计接收: {b} bytes，3 秒增量 {b - a} bytes => {(b - a) / 3.0 / 1024:F1} KB/s");
+        W($"  是否可用（非 -1）: {a >= 0 && b >= 0}");
+    }
+
+    Sec("19. 磁盘占用（vhdx 只增不减的现状）");
+    W($"  storage bytes = {WslcService.GetStorageBytes()}");
+
+    // ══ 20. 拉取中途取消 ══
+    // ⚠ 这一节会**删掉一个镜像并真拉 nginx（数百 MB）**，属于"改动本机数据 + 联网"的自检，
+    //   所以默认不跑、必须显式开两个开关（与第 15 节同一原则）。
+    Sec("20. 拉取中途取消（验证不再误判为加速失败）");
+    {
+        var pullOn = (Environment.GetEnvironmentVariable("WSLCM_PROBE_PULL") ?? "").Trim();
+        var prefix20 = probeMirror.Length == 0 ||
+                       probeMirror.Equals("official", StringComparison.OrdinalIgnoreCase)
+            ? "" : probeMirror;
+
+        if (pullOn != "1" || prefix20.Length == 0 || !WslcService.Available)
+        {
+            W("  跳过：需同时设置 WSLCM_PROBE_PULL=1 与 WSLCM_PROBE_MIRROR=<加速前缀>。");
+            W($"  当前 WSLCM_PROBE_PULL=\"{pullOn}\"　WSLCM_PROBE_MIRROR=\"{probeMirror}\"");
+            W("  该节会先删镜像再真拉 nginx，属「改动本机 + 联网」的自检，故默认不执行。");
+        }
+        else
+        {
+            // 先删掉，确保真的在下载（否则本地已有会秒回）
+            ProcRunner.Run(WslcService.ExePath,
+                new[] { "image", "rm", "-f", $"{prefix20}/library/nginx:latest" }, 60000);
+
+            var cts = new CancellationTokenSource();
+            var lines = new List<string>();
+            var task = WslcService.PullAsync("nginx:latest", prefix20,
+                s2 => { lock (lines) lines.Add(s2); }, 0, cts.Token);
+            await Task.Delay(2500);
+            W("  2.5 秒后发出取消信号…");
+            cts.Cancel();
+            var rc = await task;
+            W($"  Canceled = {rc.Canceled}　Success = {rc.Success}　ExitCode = {rc.ExitCode}");
+            W($"  期间输出 {lines.Count} 行：");
+            foreach (var l in lines.Take(8)) W("     " + l);
+            W($"  断言 取消后判为「用户停止」而非失败 : " +
+              $"{(rc.Canceled && !rc.Success ? "PASS" : "!! FAIL")}");
+        }
+    }
+
 }
 catch (Exception ex)
 {
@@ -403,40 +582,4 @@ catch (Exception ex)
 File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(false));
 Console.WriteLine();
 Console.WriteLine("结果已写入: " + outFile);
-
-    Sec("9. 网络速率采样（NetMeter）");
-    {
-        var a = WSLCManager.Helpers.NetMeter.TotalBytesReceived();
-        W($"t0 累计接收: {a} bytes ({WSLCManager.Helpers.NetMeter.Human(a)})");
-        await Task.Delay(3000);
-        var b = WSLCManager.Helpers.NetMeter.TotalBytesReceived();
-        var delta = b - a;
-        W($"t3 累计接收: {b} bytes，3 秒增量 {delta} bytes => {delta/3.0/1024:F1} KB/s");
-        W($"可用: {a >= 0 && b >= 0}");
-    }
-
-    Sec("10. 磁盘占用");
-    W($"storage bytes = {WSLCManager.Services.WslcService.GetStorageBytes()}");
-
-Sec("11. 拉取中途取消（验证不再误判为加速失败）");
-    {
-        // 先删掉 nginx，确保真的在下载
-        ProcRunner.Run(WslcService.ExePath, new[] { "image", "rm", "-f", "docker.1ms.run/library/nginx:latest" }, 60000);
-
-        var cts = new CancellationTokenSource();
-        var lines = new List<string>();
-        var task = WslcService.PullAsync("nginx:latest", "https://docker.1ms.run",
-            s2 => { lock (lines) lines.Add(s2); }, 0, cts.Token);
-        await Task.Delay(2500);
-        W($"2.5 秒后发出取消信号…");
-        cts.Cancel();
-        var r = await task;
-        W($"Canceled = {r.Canceled}");
-        W($"Success  = {r.Success}");
-        W($"ExitCode = {r.ExitCode}");
-        W($"--- 期间输出 {lines.Count} 行 ---");
-        foreach (var l in lines.Take(8)) W("   " + l);
-        W(r.Canceled ? "✓ 正确识别为用户停止" : "✗ 仍然被当成失败！");
-    }
-
-    Console.WriteLine("ALL DONE");
+Console.WriteLine("ALL DONE");

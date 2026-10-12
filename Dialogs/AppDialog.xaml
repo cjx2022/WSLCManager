@@ -54,9 +54,9 @@
             <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
                         Margin="22,20,22,18">
                 <Button x:Name="BtnCancel" Style="{StaticResource DlgButton}" Content="取消"
-                        Margin="0,0,10,0" Click="OnCancelClick"/>
+                        Margin="0,0,10,0" IsCancel="True" Click="OnCancelClick"/>
                 <Button x:Name="BtnOk" Style="{StaticResource DlgButton}" Content="确定"
-                        Click="OnOkClick"/>
+                        IsDefault="True" Click="OnOkClick"/>
             </StackPanel>
         </Grid>
     </Border>

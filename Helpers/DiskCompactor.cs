@@ -84,8 +84,9 @@ public static class DiskCompactor
         var script = Path.Combine(work, "compact.txt");
         var log = Path.Combine(work, "compact.log");
 
-        // diskpart 脚本：注意路径里有中文（张萌），脚本文件必须 UTF-16（Unicode）编码，
-        // 否则 diskpart 按 ANSI 读会乱码导致 select vdisk 失败。
+        // diskpart 脚本：路径里可能含非 ASCII 字符（用户名、中文目录等），
+        // 脚本文件必须写成 UTF-16（Unicode），否则 diskpart 按 ANSI 读会乱码，
+        // 表现为 select vdisk 找不到文件。
         var sb = new StringBuilder();
         sb.AppendLine("select vdisk file=\"" + vhdxPath + "\"");
         sb.AppendLine("attach vdisk readonly");
@@ -126,9 +127,42 @@ public static class DiskCompactor
 
         var output = "";
         try { output = File.ReadAllText(log, Encoding.UTF8); } catch { }
-        var ok = p.ExitCode == 0 && output.Contains("successfully", StringComparison.OrdinalIgnoreCase)
-                                     || output.Contains("成功");
-        return (ok, output, ok ? "" : "diskpart 返回码 " + p.ExitCode);
+
+        var (ok, why) = JudgeCompact(p.ExitCode, output);
+        return (ok, output, ok ? "" : why);
+    }
+
+    /// <summary>
+    /// 判定一次 diskpart compact 是否**真的**成功。
+    ///
+    /// 为什么不能只看「返回码 + 出现成功字样」：diskpart 脚本是顺序执行的，
+    /// `compact vdisk` 失败**不会**中断脚本 —— 后面的 `detach vdisk` 照旧执行成功，
+    /// 并在日志里写下「已成功分离虚拟磁盘文件」。于是
+    /// <c>exit==0 &amp;&amp; 日志含"successfully" || 日志含"成功"</c>
+    /// 这种写法会把 detach 的成功当成 compact 的成功（典型的假绿）。
+    ///
+    /// 现在的判据：先排除否定证据（出现任何错误字样即失败），
+    /// 再要求成功证据出现在 `compact vdisk` 那一段之后。判不出来时**判失败**
+    /// （宁可让用户看到原始日志，也不假报成功）。
+    ///
+    /// public 是为了让探针（第 17b 节）直接喂样本断言 —— 这个判定只能靠样本验，不能靠手点。
+    /// </summary>
+    public static (bool Ok, string Why) JudgeCompact(int exitCode, string output)
+    {
+        var text = output ?? "";
+        if (text.Length == 0) return (false, "diskpart 没有产生任何输出（返回码 " + exitCode + "）");
+
+        foreach (var bad in new[] { "错误", "失败", "error", "failed", "invalid", "denied" })
+            if (text.Contains(bad, StringComparison.OrdinalIgnoreCase))
+                return (false, "diskpart 输出中出现「" + bad + "」，压缩未成功");
+
+        var i = text.IndexOf("compact vdisk", StringComparison.OrdinalIgnoreCase);
+        var tail = i >= 0 ? text.Substring(i) : text;
+        var saidOk = tail.Contains("成功", StringComparison.Ordinal) ||
+                     tail.Contains("successfully", StringComparison.OrdinalIgnoreCase);
+
+        if (!saidOk) return (false, "未在 diskpart 输出中找到压缩成功的证据（返回码 " + exitCode + "）");
+        return exitCode == 0 ? (true, "") : (false, "diskpart 返回码 " + exitCode);
     }
 
     /// <summary>关闭 WSL（压缩前必须）。wslc 的会话也由它停掉。</summary>

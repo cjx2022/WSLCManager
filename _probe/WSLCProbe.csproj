@@ -24,8 +24,10 @@
     <Compile Include="..\Services\ProcRunner.cs" />
     <Compile Include="..\Services\TableParser.cs" />
     <Compile Include="..\Services\WslcService.cs" />
+    <Compile Include="..\Services\RestorePlanner.cs" />
     <Compile Include="..\Services\InstallService.cs" />
     <Compile Include="..\Services\ImageSearchService.cs" />
+    <Compile Include="..\Helpers\DiskCompactor.cs" />
     <Compile Include="..\Helpers\NetMeter.cs" />
   </ItemGroup>
 

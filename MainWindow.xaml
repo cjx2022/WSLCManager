@@ -32,6 +32,20 @@
 
         <Style TargetType="ScrollBar" BasedOn="{StaticResource ThinScrollBar}"/>
 
+        <!-- 可右键复制的单元格样式。
+             ⚠ 处理器必须挂在**单元格**上，不能挂在 DataGrid 上：
+             `MouseRightButtonUp` 是 **Direct（直接）路由事件** —— 它看着像冒泡，
+             实际是框架在处理底层的 `Mouse.MouseUp`（这个才是冒泡的）时，
+             在路由上的**每一个 UIElement 上逐个重发**一次它。
+             所以：单元格本身就在路由里 → 挂在单元格上，右键落在格子**任意位置**
+             （包括模板那层 Background=Transparent 的边框，它撑满整格）都会收到；
+             挂在祖先 DataGrid 上则只有 DataGrid 自己重发的那一次才收得到，
+             非真实输入（例如自检里用 RaiseEvent 合成）根本走不通。
+             参考：UIElement.MouseRightButtonUp 文档 "Routing strategy: Direct"。 -->
+        <Style x:Key="CopyCell" TargetType="DataGridCell" BasedOn="{StaticResource GridCell}">
+            <EventSetter Event="MouseRightButtonUp" Handler="OnContainerCellRightClick"/>
+        </Style>
+
         <!-- 左侧导航项。图标字形放在 Tag 上（Segoe MDL2 Assets，Windows 自带），
              不用额外附加属性 —— 少一套依赖，也便于将来换图标只改一处。 -->
         <Style x:Key="NavItem" TargetType="RadioButton">
@@ -330,9 +344,8 @@
                                     Click="OnCreateContainerClick"/>
                             <Button Style="{StaticResource ToolButton}" Margin="8,0,0,0"
                                     Content="刷新" Click="OnRefreshContainersClick"/>
-                            <CheckBox x:Name="ChkAllContainers" Style="{StaticResource ModernCheckBox}"
-                                      Content="显示已停止" Margin="8,0,0,0" VerticalAlignment="Center"
-                                      IsChecked="True" Checked="OnAllContainersChanged" Unchecked="OnAllContainersChanged"/>
+                            <!-- 原「显示已停止」勾选项已去掉：列表恒含已停止的容器。
+                                 留一个开关只会让人以为「容器不见了」，而它本来就在那儿。 -->
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -388,16 +401,26 @@
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
 
-                                    <!-- 名称缩窄；太长可点开看全称，悬浮也有提示 -->
-                                    <DataGridTemplateColumn Header="容器名称" Width="110" CanUserSort="False">
+                                    <!-- 名称缩窄；全称靠悬浮提示看，复制走右键。
+                                         左键不再弹窗：原来是「点一下复制 + 弹一个提示框」，
+                                         每看一次全名就被挡一次界面。 -->
+                                    <DataGridTemplateColumn Header="容器名称" Width="110" CanUserSort="False"
+                                                            CellStyle="{StaticResource CopyCell}">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}"
+                                                <TextBlock Text="{Binding Name}"
                                                            VerticalAlignment="Center" FontSize="12.5"
-                                                           Cursor="Hand"
                                                            Foreground="{DynamicResource TextBrush}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           MouseLeftButtonUp="OnNameClick"/>
+                                                           TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.ToolTip>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Name}"
+                                                                       MaxWidth="420" TextWrapping="Wrap"/>
+                                                            <TextBlock Text="右键复制" FontSize="11" Margin="0,3,0,0"
+                                                                       Foreground="{DynamicResource MutedBrush}"/>
+                                                        </StackPanel>
+                                                    </TextBlock.ToolTip>
+                                                </TextBlock>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
@@ -417,25 +440,48 @@
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
 
-                                    <DataGridTemplateColumn Header="镜像" Width="105" CanUserSort="False">
+                                    <!-- 镜像 / 端口映射：显示值都是截断过的（ImageShort / PortsShort），
+                                         右键复制取的是**全量值**（Image / Ports），不是列表里那串省略号。 -->
+                                    <DataGridTemplateColumn Header="镜像" Width="105" CanUserSort="False"
+                                                            CellStyle="{StaticResource CopyCell}">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <TextBlock Text="{Binding ImageShort}" ToolTip="{Binding Image}"
+                                                <TextBlock Text="{Binding ImageShort}"
                                                            VerticalAlignment="Center" FontSize="12.5"
                                                            Foreground="{DynamicResource SubTextBrush}"
-                                                           TextTrimming="CharacterEllipsis"/>
+                                                           TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.ToolTip>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Image}"
+                                                                       MaxWidth="420" TextWrapping="Wrap"/>
+                                                            <TextBlock Text="右键复制" FontSize="11" Margin="0,3,0,0"
+                                                                       Foreground="{DynamicResource MutedBrush}"/>
+                                                        </StackPanel>
+                                                    </TextBlock.ToolTip>
+                                                </TextBlock>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
 
-                                    <DataGridTemplateColumn Header="端口映射" Width="120" CanUserSort="False">
+                                    <DataGridTemplateColumn Header="端口映射" Width="120" CanUserSort="False"
+                                                            CellStyle="{StaticResource CopyCell}">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <TextBlock Text="{Binding PortsShort}" ToolTip="{Binding PortsFull}"
+                                                <TextBlock Text="{Binding PortsShort}"
                                                            VerticalAlignment="Center" FontSize="12"
                                                            FontFamily="Consolas, Microsoft YaHei UI"
                                                            Foreground="{DynamicResource SubTextBrush}"
-                                                           TextTrimming="CharacterEllipsis"/>
+                                                           TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.ToolTip>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding PortsFull}"
+                                                                       MaxWidth="420" TextWrapping="Wrap"/>
+                                                            <TextBlock Text="右键复制"
+                                                                       FontSize="11" Margin="0,3,0,0"
+                                                                       Foreground="{DynamicResource MutedBrush}"/>
+                                                        </StackPanel>
+                                                    </TextBlock.ToolTip>
+                                                </TextBlock>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>

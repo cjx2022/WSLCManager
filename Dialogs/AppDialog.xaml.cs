@@ -23,8 +23,21 @@ public partial class AppDialog : Window
         if (e.ButtonState == MouseButtonState.Pressed) DragMove();
     }
 
-    private void OnOkClick(object sender, RoutedEventArgs e) { DialogResult = true; Close(); }
-    private void OnCancelClick(object sender, RoutedEventArgs e) { DialogResult = false; Close(); }
+    private void OnOkClick(object sender, RoutedEventArgs e) => Finish(true);
+    private void OnCancelClick(object sender, RoutedEventArgs e) => Finish(false);
+
+    /// <summary>
+    /// 收口关闭。
+    /// ⚠ <c>DialogResult</c> 只能在 <c>ShowDialog()</c>（模态）下赋值：验收参数
+    /// <c>--dialog=…</c> 配 <c>--screenshot=</c> 时走的是非模态 <c>Show()</c>，
+    /// 那里赋值会抛 InvalidOperationException —— 表现就是「点一下按钮就报错」。
+    /// </summary>
+    private void Finish(bool ok)
+    {
+        try { DialogResult = ok; }
+        catch (InvalidOperationException) { /* 非模态显示：没有 DialogResult 可用，直接关掉 */ }
+        Close();
+    }
 
     private void Setup(string title, string message, string okText,
                        bool danger, bool showCancel, string cancelText)
@@ -34,6 +47,9 @@ public partial class AppDialog : Window
         BtnOk.Content = okText;
         BtnCancel.Content = cancelText;
         BtnCancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
+
+        // 没有「取消」时，Esc 也应该能关掉（否则信息框只能用鼠标点按钮）
+        BtnOk.IsCancel = !showCancel;
 
         if (danger)
         {
