@@ -39,17 +39,23 @@ jobs:
         run: |
           set -e
           NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          TITLE="${GITHUB_REF_NAME}"
           if [ -f "$NOTES" ]; then
             TITLE="$(head -1 "$NOTES")"
             tail -n +2 "$NOTES" > "$RUNNER_TEMP/notes.md"
-            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-              gh release edit "${GITHUB_REF_NAME}" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
-              gh release upload "${GITHUB_REF_NAME}" publish/WSLCManager.exe --clobber
-            else
-              gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
-                --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
-            fi
           else
-            gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
-              --title "${GITHUB_REF_NAME}" --generate-notes
+            printf '（本版本没有单独的 Release 说明，以下为自动生成。）\n' > "$RUNNER_TEMP/notes.md"
           fi
+
+          # 不依赖 `gh release view` 的探测结果：直接建，建不成说明已存在，再改为更新。
+          if gh release create "${GITHUB_REF_NAME}" publish/WSLCManager.exe \
+               --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" 2>/dev/null; then
+            echo "已创建新的 Release：${GITHUB_REF_NAME}"
+          else
+            echo "Release 已存在 → 更新标题与说明，并覆盖附件"
+            gh release edit "${GITHUB_REF_NAME}" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release upload "${GITHUB_REF_NAME}" publish/WSLCManager.exe --clobber
+          fi
+
+          echo "--- 结果核对 ---"
+          gh release view "${GITHUB_REF_NAME}" --json tagName,name,isDraft,isPrerelease
