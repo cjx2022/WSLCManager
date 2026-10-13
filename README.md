@@ -405,7 +405,7 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 # 编译
 dotnet build -c Release
 
-# 服务层探针（不需要界面，直接验证 CLI 解析）—— 24 节自检
+# 服务层探针（不需要界面，直接验证 CLI 解析）—— 25 节自检
 dotnet run --project _probe
 
 # 发布单文件（框架依赖，约 0.7MB）
@@ -435,7 +435,7 @@ WSLCManager/
 │                  ContainerLogsDialog / TerminalDialog
 ├── Themes/        Styles.xaml
 ├── Assets/        logo.png（应用内 logo）
-├── _probe/        服务层探针控制台（24 节自检，直接复用主项目源码）
+├── _probe/        服务层探针控制台（25 节自检，直接复用主项目源码）
 ├── _tools/        make_logo.py（品牌图形生成）/ screengrab.py（真实屏幕抓取，验收用）
 ├── LICENSE        MIT
 └── app.ico / app.manifest
