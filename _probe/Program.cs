@@ -627,6 +627,21 @@ try
     A21("自建网络取到详情且无网段才说「自动分配」",
         new WSLCManager.Models.NetworkInfo { Name = "app-net", DetailLoaded = true }.SubnetText == "自动分配");
 
+    // 网络列表用来标记「已存在的坏网段」——与创建校验共用同一个判定
+    A21("ExplainSubnet 对回环段给出原因", NetworkValidator.ExplainSubnet("127.11.0.0/24").Contains("回环"));
+    A21("ExplainSubnet 对正常段返回空", NetworkValidator.ExplainSubnet("172.30.0.0/24") == "");
+    A21("ExplainSubnet 对留空返回空（自动分配）", NetworkValidator.ExplainSubnet("") == "");
+    A21("ExplainSubnet 对畸形 CIDR 也报错", NetworkValidator.ExplainSubnet("172.30.0.0/99").Length > 0);
+    A21("列表标记与创建校验同源（两边都拒回环段）",
+        NetworkValidator.ExplainSubnet("127.11.0.0/24").Length > 0 &&
+        !NetworkValidator.Validate("n1", "127.11.0.0/24", "", out _));
+
+    var netBad = new WSLCManager.Models.NetworkInfo
+    { Name = "a1231", Subnet = "127.11.0.0/24", DetailLoaded = true };
+    netBad.SubnetWarning = NetworkValidator.ExplainSubnet(netBad.Subnet);
+    A21("NetworkInfo 能带上坏网段警告", netBad.HasSubnetWarning);
+    A21("正常网络不带警告", !new WSLCManager.Models.NetworkInfo().HasSubnetWarning);
+
     // 关联容器：inspect 的 Containers 是个 map（键=容器 ID），值里才有 Name 与 IPv4Address
     const string netWithCtr = """
         [{"Containers":{"f70880de115e":{"Name":"nginx-test","EndpointID":"e1","MacAddress":"02:42:ac:11:00:02","IPv4Address":"172.17.0.2/16","IPv6Address":""},"aaaaaaaaaaaa":{"Name":"web-1","EndpointID":"e2","MacAddress":"02:42:ac:1e:00:02","IPv4Address":"172.30.0.2/24","IPv6Address":""}},"Driver":"bridge","IPAM":{"Config":[{"Gateway":"172.30.0.1","Subnet":"172.30.0.0/24"}]},"Id":"84fb27ff4c873feb8b452d051b50a69178c2363e30d06692b9df69883128f3ee","Name":"app-net","Scope":"local"}]
@@ -661,6 +676,28 @@ try
     A21("合法输入通过", NetworkValidator.Validate("app-net", "172.30.0.0/24", "172.30.0.1", out _));
     A21("网段留空通过（自动分配）", NetworkValidator.Validate("app-net", "", "", out _));
     A21("/32 边界掩码通过", NetworkValidator.Validate("n1", "10.0.0.1/32", "10.0.0.1", out _));
+
+    // ↓ 2026-10-14 实测踩到的坑：`wslc network create` **不校验网段** ——
+    //   127.11.0.0/24 建得出来（exit=0、列表里也正常），直到 run 才报
+    //   「route for the gateway 127.11.0.1 could not be found」。以下断言把「当地就该拦住」固化。
+    A21("回环段 127.11.0.0/24 被拦",
+        !NetworkValidator.Validate("n1", "127.11.0.0/24", "127.11.0.1", out var w127));
+    A21("回环提示里点明「回环」", w127.Contains("回环"));
+    A21("0.0.0.0/8 段被拦", !NetworkValidator.Validate("n1", "0.1.2.0/24", "", out _));
+    A21("链路本地 169.254/16 被拦", !NetworkValidator.Validate("n1", "169.254.1.0/24", "", out _));
+    A21("多播 224.0.0.0/4 被拦", !NetworkValidator.Validate("n1", "224.1.0.0/24", "", out _));
+    A21("保留段 240.0.0.0/4 被拦", !NetworkValidator.Validate("n1", "240.1.0.0/24", "", out _));
+    A21("10.0.0.0/8 通过（别和回环混淆误拦）",
+        NetworkValidator.Validate("n1", "10.0.0.0/8", "", out _));
+    A21("172.30.0.0/24 通过", NetworkValidator.Validate("n1", "172.30.0.0/24", "", out _));
+    A21("192.168.99.0/24 通过", NetworkValidator.Validate("n1", "192.168.99.0/24", "", out _));
+    A21("主机位非零 172.30.0.5/24 被拦",
+        !NetworkValidator.Validate("n1", "172.30.0.5/24", "", out var wHost));
+    A21("并提示正确的网络地址 172.30.0.0/24", wHost.Contains("172.30.0.0/24"));
+    A21("掩码抹零正确：172.30.0.5/24 → 172.30.0.0", NetworkValidator.Masked(
+        System.Net.IPAddress.Parse("172.30.0.5"), 24).ToString() == "172.30.0.0");
+    A21("掩码 0 不当成「全 1」（C# 移位按 32 取模的坑）",
+        NetworkValidator.Masked(System.Net.IPAddress.Parse("10.20.30.40"), 0).ToString() == "0.0.0.0");
     A21("同级相邻网段判定正确", NetworkValidator.InSameSubnet(
         System.Net.IPAddress.Parse("172.30.0.1"), System.Net.IPAddress.Parse("172.30.0.200"), 24));
     A21("跨网段不误判为同段", !NetworkValidator.InSameSubnet(

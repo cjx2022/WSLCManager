@@ -63,6 +63,16 @@ public sealed class NetworkInfo
 
     public string GatewayText => Gateway.Length > 0 ? Gateway : "—";
 
+    /// <summary>
+    /// 网段不可用的原因（空串 = 没问题）。刷新时由 <c>NetworkValidator.ExplainSubnet</c> 填入 ——
+    /// **不在 Model 里自己判**，判定只保留 Services 层那一份。
+    /// 存在的意义：`wslc network create` 不校验网段，用户手上可能早就有个永远起不了容器的网络，
+    /// 列表得能把它指出来。
+    /// </summary>
+    public string SubnetWarning { get; set; } = "";
+
+    public bool HasSubnetWarning => SubnetWarning.Length > 0;
+
     public int ContainerCount => Containers.Count;
 
     /// <summary>列表「关联容器」列：名称逗号分隔，空则 "—"。</summary>

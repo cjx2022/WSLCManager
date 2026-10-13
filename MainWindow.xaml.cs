@@ -1794,6 +1794,9 @@ public partial class MainWindow : Window
             Log("  解决：重新新建容器，并在「启动命令」里填一个常驻命令，例如 sleep infinity 或 sh。", TxtContainerLog);
         }
 
+        // 网络不可用导致的启动失败（原始报错里没有「网段」两个字，必须补一句人话）
+        if (!r.Success) ExplainNetworkStartFailure(spec.Network, r.All, TxtContainerLog);
+
         if (r.Success && DiedRightAfterStart(st))
         {
             Log(ExplainImmediateExit(!string.IsNullOrWhiteSpace(spec.Name) ? spec.Name : "新容器", st), TxtContainerLog);
@@ -2555,6 +2558,8 @@ public partial class MainWindow : Window
         Log(r.Success ? "容器已创建。" : $"创建失败（退出码 {r.ExitCode}）。", TxtContainerLog);
         foreach (var line in TableParser.Lines(r.All)) Log(line, TxtContainerLog);
 
+        if (!r.Success) ExplainNetworkStartFailure(spec.Network, r.All, TxtContainerLog);
+
         if (r.Success && DiedRightAfterStart(st))
         {
             Log(ExplainImmediateExit(!string.IsNullOrWhiteSpace(spec.Name) ? spec.Name : "新容器", st), TxtContainerLog);
@@ -2860,13 +2865,25 @@ public partial class MainWindow : Window
 
         var (items, raw) = await WslcService.ListNetworksAsync();
 
+        // 标记「网段不可用」的网络。wslc network create 不校验网段，所以列表里出现的网络
+        // 未必能用 —— 必须在这里认出来，否则用户只有等到启容器报 runc 错误才知道。
+        foreach (var n in items)
+            n.SubnetWarning = NetworkValidator.ExplainSubnet(n.Subnet);
+
+        var badCount = items.Count(n => n.HasSubnetWarning);
+
         Ui(() =>
         {
             if (_demoMode) return;
             _networks.Clear();
             foreach (var n in items) _networks.Add(n);
-            TxtNetSummary.Text = items.Count == 0 ? "" : $"{items.Count} 个网络";
+            TxtNetSummary.Text = items.Count == 0
+                ? ""
+                : $"{items.Count} 个网络" + (badCount > 0 ? $"（{badCount} 个网段不可用）" : "");
         });
+
+        if (badCount > 0)
+            Log($"注意：{badCount} 个网络的网段不可用（列表里有 ⚠）—— 这些网络能建容器，但容器起不来。", TxtNetworkLog);
 
         if (!raw.Success && raw.ErrorMessage.Length > 0)
         {
@@ -2982,6 +2999,34 @@ public partial class MainWindow : Window
     }
 
     private void OnClearNetworkLogClick(object sender, RoutedEventArgs e) => TxtNetworkLog.Clear();
+
+    /// <summary>
+    /// 容器启动失败若是「网关/网段不可用」，补一段人话诊断。返回是否命中。
+    ///
+    /// 为什么需要：`wslc network create` 对网段**零校验** —— `127.11.0.0/24` 这种
+    /// 回环段的网络建得出来、列表里看着也正常，直到启容器才报：
+    /// <code>
+    /// failed to set gateway while updating gateway: route for the gateway 127.11.0.1
+    /// could not be found: invalid argument
+    /// </code>
+    /// 原始报错里**没有出现「网段」两个字**，用户只能看到一长串 runc/shim 术语，
+    /// 根本猜不到是自己填的 CIDR 有问题。
+    /// </summary>
+    private bool ExplainNetworkStartFailure(string network, string output, TextBox target)
+    {
+        var text = output ?? "";
+        bool looksLikeGateway = text.Contains("route for the gateway", StringComparison.OrdinalIgnoreCase)
+                                || text.Contains("failed to set gateway", StringComparison.OrdinalIgnoreCase);
+        if (!looksLikeGateway) return false;
+
+        var net = string.IsNullOrWhiteSpace(network) ? "（默认网络）" : network;
+        Log("  诊断：容器的网关设不上 —— 这个网络的网段不可用。", target);
+        Log($"  原因：网络「{net}」的网段在容器内没有对应路由，网关地址不可达" +
+            "（回环 127.0.0.0/8、0.0.0.0/8、169.254.0.0/16、224.0.0.0/4、240.0.0.0/4 都会这样）。", target);
+        Log("  解决：到「网络管理」页删掉这个网络，用私网段重建（例如 172.30.0.0/24 或 192.168.99.0/24），再新建容器。", target);
+        Log("  注：wslc network create 不校验网段，所以这种网络建得出来、却永远起不了容器。", target);
+        return true;
+    }
 
     // ══════════════════════════ 设置 ══════════════════════════
     private void LoadSettingsIntoUi()

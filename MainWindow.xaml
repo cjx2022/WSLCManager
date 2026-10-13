@@ -886,8 +886,25 @@
                                         </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="驱动" Binding="{Binding DriverText}" Width="100"
                                                             CanUserSort="False"/>
-                                        <DataGridTextColumn Header="网段" Binding="{Binding SubnetText}" Width="140"
-                                                            CanUserSort="False"/>
+                                        <!-- 网段：wslc 不校验网段，所以"能用不能用"得由列表指出来 ——
+                                             不可用时右侧挂一个 ⚠，悬停给原因。 -->
+                                        <DataGridTemplateColumn Header="网段" Width="140" CanUserSort="False">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding SubnetText}" FontSize="12.5"
+                                                                   Foreground="{DynamicResource SubTextBrush}"/>
+                                                        <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets"
+                                                                   FontSize="11.5" Margin="6,0,0,0"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource ErrBrush}"
+                                                                   ToolTip="{Binding SubnetWarning}"
+                                                                   Visibility="{Binding HasSubnetWarning,
+                                                                               Converter={StaticResource BoolVisConv}}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="网关" Binding="{Binding GatewayText}" Width="120"
                                                             CanUserSort="False"/>
                                         <!-- 关联容器：wslc network inspect 的 Containers 字段，
