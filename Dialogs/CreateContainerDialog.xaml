@@ -259,6 +259,27 @@
                                 </StackPanel>
                             </Grid>
 
+                            <!-- 网络：默认项 = 不下发 network 参数，语义与旧版本完全一致 -->
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="网络" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox x:Name="CmbNetwork" Style="{StaticResource ModernComboBox}"
+                                              Height="30" VerticalContentAlignment="Center"
+                                              SelectionChanged="OnAnyChanged"
+                                              ToolTip="在「网络管理」页创建的网络会出现在这里；选默认即用 wslc 的 bridge 网络"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                                    <TextBlock FontSize="11.5" TextWrapping="Wrap" LineHeight="17"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               Text="选默认即可；选自定义网络后容器会拿到该网段的 IP。"/>
+                                </StackPanel>
+                            </Grid>
+
                         </StackPanel>
                     </Border>
                 </StackPanel>

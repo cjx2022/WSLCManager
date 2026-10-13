@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Text;
+using WSLCManager.Helpers;
 using WSLCManager.Models;
 using WSLCManager.Services;
 
@@ -572,6 +573,179 @@ try
               $"{(rc.Canceled && !rc.Success ? "PASS" : "!! FAIL")}");
         }
     }
+
+    // ══ 21. 网络列表与详情解析 ══
+    // 夹具取自 2026-10-13 本机实测输出。这一块最容易写错的地方是**两路分工**：
+    //   · network ls --format json  → NDJSON，只有 ID/名称/驱动/范围，**根本没有网段**
+    //   · network inspect <名...> -f json → 一个 JSON 数组，才带 IPAM 网段与 Containers
+    // 所以「网段为空」不是 bug，是没补 inspect；下面的断言把这条钉死。
+    Sec("21. 网络列表与详情解析（ls + inspect 两路合并）");
+    int s21pass = 0, s21fail = 0;
+    void A21(string label, bool ok)
+    {
+        if (ok) s21pass++; else s21fail++;
+        W($"  断言 {label,-42}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    const string netLsJson = """
+        {"CreatedAt":"2026-10-13 16:26:40.233599799 +0000 UTC","Driver":"bridge","ID":"ea84fe08d007","IPv4":"true","IPv6":"false","Internal":"false","Labels":"","Name":"bridge","Scope":"local"}
+        {"CreatedAt":"2026-10-12 15:40:37.398394786 +0000 UTC","Driver":"host","ID":"5e5a8d1074be","IPv4":"true","IPv6":"false","Internal":"false","Labels":"","Name":"host","Scope":"local"}
+        {"CreatedAt":"2026-10-12 15:40:37.383597901 +0000 UTC","Driver":"null","ID":"f6ff3153271d","IPv4":"true","IPv6":"false","Internal":"false","Labels":"","Name":"none","Scope":"local"}
+        {"CreatedAt":"2026-10-13 16:27:25.300710107 +0000 UTC","Driver":"bridge","ID":"84fb27ff4c87","IPv4":"true","IPv6":"false","Internal":"false","Labels":"","Name":"mytest-net","Scope":"local"}
+        """;
+
+    var netList = WslcService.ParseNetworkList(netLsJson);
+    A21("ls JSON 解析出 4 个网络", netList.Count == 4);
+    A21("内置网络排最前（bridge）", netList.Count > 0 && netList[0].Name == "bridge");
+    A21("自建网络排在内置之后", netList.Count > 0 && netList[^1].Name == "mytest-net");
+    A21("内置 bridge 不允许删", netList.Count > 0 && !netList[0].CanRemove);
+    A21("自建网络允许删", netList.Count > 0 && netList[^1].CanRemove);
+    A21("驱动 null → 文案「none 无网络」", netList.Any(n => n.DriverText == "none 无网络"));
+    A21("ls 阶段网段为空（本来就没有）", netList.All(n => n.Subnet.Length == 0));
+
+    // inspect 输出的字段与实测一致（IPAM.Config[0] 里才是 Subnet/Gateway）
+    const string netInspectJson = """
+        [{"Attachable":false,"ConfigOnly":false,"Containers":{},"Created":"2026-10-13T16:27:19.079432526Z","Driver":"bridge","EnableIPv4":true,"EnableIPv6":false,"IPAM":{"Config":[{"Gateway":"172.17.0.1","Subnet":"172.17.0.0/16"}],"Driver":"default","Options":{}},"Id":"27db8600f40ff4df1a1494368df8804a2312db8997456febcfaf2633d42b200f","Ingress":false,"Internal":false,"Labels":{},"Name":"bridge","Options":{},"Scope":"local","Status":{}},{"Attachable":false,"Containers":{},"Created":"2026-10-13T16:27:25.300710107Z","Driver":"bridge","EnableIPv4":true,"EnableIPv6":false,"IPAM":{"Config":[{"Gateway":"172.30.0.1","Subnet":"172.30.0.0/24"}],"Driver":"default","Options":{}},"Id":"84fb27ff4c873feb8b452d051b50a69178c2363e30d06692b9df69883128f3ee","Internal":false,"Labels":{},"Name":"mytest-net","Options":{},"Scope":"local","Status":{}}]
+        """;
+
+    WslcService.ApplyNetworkDetails(netList, netInspectJson);
+    var netBridge = netList.First(n => n.Name == "bridge");
+    var netMine = netList.First(n => n.Name == "mytest-net");
+
+    A21("补详情后 bridge 网段 172.17.0.0/16", netBridge.Subnet == "172.17.0.0/16");
+    A21("bridge 网关 172.17.0.1", netBridge.Gateway == "172.17.0.1");
+    A21("自定义网段 172.30.0.0/24 被读到", netMine.Subnet == "172.30.0.0/24");
+    A21("自定义网关 172.30.0.1 被读到", netMine.Gateway == "172.30.0.1");
+    A21("ID 被补成完整 64 位", netBridge.Id.Length == 64);
+    A21("创建时间归一成本地 yyyy-MM-dd HH:mm", netBridge.Created.Length == 16);
+    A21("没 inspect 到的 host 仍标未加载", !netList.First(n => n.Name == "host").DetailLoaded);
+    A21("网段缺失时给中性占位而非空白", new WSLCManager.Models.NetworkInfo().SubnetText == "—");
+    // 内置 host/none 根本没有网段，说「自动分配」是误导 —— 只能是「—」
+    A21("内置 host 无网段 → 「—」", netList.First(n => n.Name == "host").SubnetText == "—");
+    A21("自建网络未取详情时也给「—」",
+        new WSLCManager.Models.NetworkInfo { Name = "app-net" }.SubnetText == "—");
+    A21("自建网络取到详情且无网段才说「自动分配」",
+        new WSLCManager.Models.NetworkInfo { Name = "app-net", DetailLoaded = true }.SubnetText == "自动分配");
+
+    // 关联容器：inspect 的 Containers 是个 map（键=容器 ID），值里才有 Name 与 IPv4Address
+    const string netWithCtr = """
+        [{"Containers":{"f70880de115e":{"Name":"nginx-test","EndpointID":"e1","MacAddress":"02:42:ac:11:00:02","IPv4Address":"172.17.0.2/16","IPv6Address":""},"aaaaaaaaaaaa":{"Name":"web-1","EndpointID":"e2","MacAddress":"02:42:ac:1e:00:02","IPv4Address":"172.30.0.2/24","IPv6Address":""}},"Driver":"bridge","IPAM":{"Config":[{"Gateway":"172.30.0.1","Subnet":"172.30.0.0/24"}]},"Id":"84fb27ff4c873feb8b452d051b50a69178c2363e30d06692b9df69883128f3ee","Name":"app-net","Scope":"local"}]
+        """;
+
+    var l2 = WslcService.ParseNetworkList("""{"ID":"84fb27ff4c87","Name":"app-net","Driver":"bridge","Scope":"local"}""");
+    WslcService.ApplyNetworkDetails(l2, netWithCtr);
+    A21("关联容器解析出 2 个", l2[0].ContainerCount == 2);
+    A21("容器名取 inspect 的 Name", l2[0].ContainersText.Contains("nginx-test"));
+    A21("容器网络内 IP 一并取到", l2[0].Containers.Any(c => c.Ip == "172.17.0.2/16"));
+    A21("数量文案「2 个」", l2[0].CountText == "2 个");
+    A21("有容器时删除提示会劝住", l2[0].RemoveTip.Contains("2"));
+
+    var l3 = WslcService.ParseNetworkList("""{"ID":"5e5a8d1074be","Name":"host","Driver":"host","Scope":"local"}""");
+    WslcService.ApplyNetworkDetails(l3, netInspectJson);
+    A21("无关联容器 → 占位符「—」", l3[0].ContainersText == "—");
+
+    // 输出里夹带提示文本时仍要能解析（RunResult.All 是 stdout+stderr 拼起来的）
+    var l4 = WslcService.ParseNetworkList("""{"ID":"84fb27ff4c87","Name":"app-net","Driver":"bridge","Scope":"local"}""");
+    WslcService.ApplyNetworkDetails(l4, "提示：某行无关输出\n" + netWithCtr + "\n（结束）");
+    A21("夹带提示文本仍能解析", l4[0].ContainerCount == 2);
+
+    // 创建前的本地校验
+    A21("名称留空被拦", !NetworkValidator.Validate("", "172.30.0.0/24", "", out _));
+    A21("名称含 / 被拦", !NetworkValidator.Validate("a/b", "", "", out _));
+    A21("占用内置名 bridge 被拦", !NetworkValidator.Validate("bridge", "", "", out _));
+    A21("CIDR 缺掩码被拦", !NetworkValidator.Validate("n1", "172.30.0.0", "", out _));
+    A21("掩码 33 被拦", !NetworkValidator.Validate("n1", "172.30.0.0/33", "", out _));
+    A21("非 IPv4 被拦", !NetworkValidator.Validate("n1", "300.1.1.0/24", "", out _));
+    A21("网关不在网段内被拦", !NetworkValidator.Validate("n1", "172.30.0.0/24", "172.31.0.1", out _));
+    A21("只填网关不填网段被拦", !NetworkValidator.Validate("n1", "", "172.30.0.1", out _));
+    A21("合法输入通过", NetworkValidator.Validate("app-net", "172.30.0.0/24", "172.30.0.1", out _));
+    A21("网段留空通过（自动分配）", NetworkValidator.Validate("app-net", "", "", out _));
+    A21("/32 边界掩码通过", NetworkValidator.Validate("n1", "10.0.0.1/32", "10.0.0.1", out _));
+    A21("同级相邻网段判定正确", NetworkValidator.InSameSubnet(
+        System.Net.IPAddress.Parse("172.30.0.1"), System.Net.IPAddress.Parse("172.30.0.200"), 24));
+    A21("跨网段不误判为同段", !NetworkValidator.InSameSubnet(
+        System.Net.IPAddress.Parse("172.30.0.1"), System.Net.IPAddress.Parse("172.31.0.1"), 24));
+
+    W($"  第 21 节小结: {s21pass} PASS / {s21fail} FAIL");
+
+    // ══ 22. 镜像存档参数 + 容器网络参数 ══
+    // image save/load 是「几百 MB 级」的操作，不可能每次自检都真跑。
+    // 抽成纯函数后，这里只钉参数形状（顺序、选项名、去空格）。
+    Sec("22. 镜像存档参数与容器网络参数");
+    int s22pass = 0, s22fail = 0;
+    void A22(string label, bool ok)
+    {
+        if (ok) s22pass++; else s22fail++;
+        W($"  断言 {label,-42}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    var sv = WslcService.BuildImageSaveArgs("  nginx:1.27  ", "  D:\\out\\nginx.tar  ");
+    A22("导出参数序列正确", string.Join(" ", sv) == "image save -o D:\\out\\nginx.tar nginx:1.27");
+    A22("导出用 -o 而不是 --output", sv.Contains("-o"));
+
+    var ld = WslcService.BuildImageLoadArgs("  D:\\out\\nginx.tar  ");
+    A22("导入参数序列正确", string.Join(" ", ld) == "image load -i D:\\out\\nginx.tar");
+    A22("导入用 -i 而不是 --input", ld.Contains("-i"));
+
+    var specNet = new ContainerSpec { Image = "alpine:latest", Name = "probe-net", Network = "app-net" };
+    var argsNet = specNet.ToArgs();
+    var ni = argsNet.IndexOf("--network");
+    A22("指定网络 → 下发 --network", ni >= 0);
+    A22("网络名跟在选项之后", ni >= 0 && ni + 1 < argsNet.Count && argsNet[ni + 1] == "app-net");
+    A22("命令行预览含 --network", specNet.PreviewCommandLine().Contains("--network app-net"));
+
+    var specNoNet = new ContainerSpec { Image = "alpine:latest", Name = "probe-plain" };
+    A22("不选网络 → 完全不下发该参数", !specNoNet.ToArgs().Contains("--network"));
+    A22("留空网络不被当成空字符串下发", specNoNet.ToArgs().All(x => x != ""));
+
+    var specBlank = new ContainerSpec { Image = "alpine:latest", Network = "   " };
+    A22("空白网络名也不下发", !specBlank.ToArgs().Contains("--network"));
+
+    W($"  第 22 节小结: {s22pass} PASS / {s22fail} FAIL");
+
+    // ══ 23. 开机自启（注册表命令行 + 名单快照往返）══
+    // 这一节**不碰真实注册表**：Enable/Disable 会改用户的开机项，自检不该动它。
+    // 只验证纯函数（命令行拼装、快照序列化/解析）与路径约定。
+    Sec("23. 开机自启：命令行与名单快照（纯函数，不写注册表）");
+    int s23pass = 0, s23fail = 0;
+    void A23(string label, bool ok)
+    {
+        if (ok) s23pass++; else s23fail++;
+        W($"  断言 {label,-42}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    A23("自启参数是 --autostart", AutoStart.AutoStartArgument == "--autostart");
+    A23("启动项写在 HKCU CurrentVersion\\Run",
+        AutoStart.RegistryKeyPath == "Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    A23("启动项名固定 WSLCManager", AutoStart.EntryName == "WSLCManager");
+
+    var cmdLine = AutoStart.BuildCommandLine(@"C:\Program Files\WSLC\WSLCManager.exe");
+    A23("带空格路径会被引号包住", cmdLine.StartsWith("\"C:\\Program Files\\WSLC\\WSLCManager.exe\""));
+    A23("命令行尾部带自启参数", cmdLine.EndsWith(" --autostart"));
+    A23("空路径 → 空命令行（不当成合法项写入）", AutoStart.BuildCommandLine("") == "");
+    A23("名单文件落在配置目录", AutoStart.SnapshotPath.EndsWith("autostart-containers.txt"));
+
+    var snapText = AutoStart.SerializeSnapshot(
+        new[] { "web-frontend", "api-server", "api-server", "  " },
+        new DateTime(2026, 10, 14, 0, 30, 0));
+    A23("快照以注释头开头", snapText.StartsWith("# WSLC 容器管理器"));
+    A23("快照带时间戳（仅供排查）", snapText.Contains("2026-10-14 00:30:00"));
+    A23("序列化时已去重去空白", snapText.Split('\n').Count(l => l.Trim() == "api-server") == 1);
+
+    var snapBack = AutoStart.ParseSnapshot(snapText);
+    A23("往返一致（2 个容器）", snapBack.Count == 2);
+    A23("顺序保持不变", snapBack[0] == "web-frontend" && snapBack[1] == "api-server");
+    A23("注释行不会被当成容器名", !snapBack.Any(n => n.StartsWith("#")));
+    A23("空行与空白被忽略", AutoStart.ParseSnapshot("\n\n  web-1  \n\t\n").Single() == "web-1");
+    A23("解析时大小写不敏感去重", AutoStart.ParseSnapshot("Web-1\nweb-1\nweb-2").Count == 2);
+    A23("空内容 → 空名单（不抛异常）", AutoStart.ParseSnapshot("").Count == 0);
+    A23("用户手加的分号注释也忽略", AutoStart.ParseSnapshot("; 备注\nweb-1").Count == 1);
+
+    // 只有空注释头时（= 关机前没有容器在跑）解析结果必须是空，否则开机自启会去 start 一堆不存在的东西
+    var emptySnap = AutoStart.SerializeSnapshot(Array.Empty<string>(), DateTime.Now);
+    A23("没有运行中容器时快照解析为空", AutoStart.ParseSnapshot(emptySnap).Count == 0);
+
+    W($"  第 23 节小结: {s23pass} PASS / {s23fail} FAIL");
 
 }
 catch (Exception ex)

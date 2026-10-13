@@ -207,6 +207,8 @@
                                  Tag="&#xE7B8;" Content="容器管理" Checked="OnNavChanged"/>
                     <RadioButton x:Name="NavImage" Style="{StaticResource NavItem}" GroupName="nav"
                                  Tag="&#xE958;" Content="镜像管理" Checked="OnNavChanged"/>
+                    <RadioButton x:Name="NavNetwork" Style="{StaticResource NavItem}" GroupName="nav"
+                                 Tag="&#xE839;" Content="网络管理" Checked="OnNavChanged"/>
                     <RadioButton x:Name="NavBackup" Style="{StaticResource NavItem}" GroupName="nav"
                                  Tag="&#xE8E5;" Content="备份与清理" Checked="OnNavChanged"/>
                     <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" GroupName="nav"
@@ -591,10 +593,10 @@
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="0,2,0,10">
-                        <StackPanel Orientation="Horizontal">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                             <Border Background="{DynamicResource CardBrush}" CornerRadius="6"
                                     BorderBrush="{DynamicResource BorderBrush2}" BorderThickness="1"
-                                    Width="330" Height="34" Margin="0,0,8,0">
+                                    Width="300" Height="34" Margin="0,0,8,0">
                                 <TextBox x:Name="TxtPullImage" Style="{StaticResource ModernTextBox}"
                                          BorderThickness="0" Background="Transparent"
                                          VerticalContentAlignment="Center" Padding="10,0,10,0"
@@ -613,6 +615,17 @@
                             <TextBlock x:Name="TxtPullProgress" VerticalAlignment="Center" Margin="14,0,0,0"
                                        FontSize="12.5" FontFamily="Consolas, Microsoft YaHei UI"
                                        Foreground="{DynamicResource AccentBrush}"/>
+                        </StackPanel>
+
+                        <!-- 镜像存档：导出/导入 tar。官方命令就是 image save -o / image load -i，
+                             不走「备份与清理」那条容器导出链（那一条导的是容器文件系统）。 -->
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Style="{StaticResource ToolButton}" Content="导出选中镜像…"
+                                    Click="OnExportImageClick"
+                                    ToolTip="把选中的镜像打包成 tar（wslc image save）"/>
+                            <Button x:Name="BtnImportImage" Style="{StaticResource ToolButton}" Margin="0"
+                                    Content="导入镜像…" Click="OnImportImageClick"
+                                    ToolTip="从 tar 恢复镜像（wslc image load）"/>
                         </StackPanel>
                     </Grid>
 
@@ -748,7 +761,201 @@
                     </Border>
                 </Grid>
 
-                <!-- ④ 设置与加速 -->
+                <!-- ④ 网络管理 -->
+                <Grid x:Name="PanelNetwork" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Padding="18,16">
+                        <StackPanel>
+                            <TextBlock Text="创建网络" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
+                                       Foreground="{DynamicResource SubTextBrush}"
+                                       Text="用 wslc network create 建 bridge 网络。网段留空则由 wslc 自行分配；同一台机器上几个网络的网段不要重叠，否则容器会分不到地址。"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="230"/>
+                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="170"/>
+                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="170"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="网络名称 *" FontSize="12" Margin="0,0,0,5"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Border Background="{DynamicResource CardBrush}" CornerRadius="6"
+                                            BorderBrush="{DynamicResource BorderBrush2}" BorderThickness="1"
+                                            Height="34">
+                                        <TextBox x:Name="TxtNetName" Style="{StaticResource ModernTextBox}"
+                                                 BorderThickness="0" Background="Transparent"
+                                                 VerticalContentAlignment="Center" Padding="10,0"
+                                                 TextAlignment="Left"
+                                                 ToolTip="例如 app-net、db-net"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="网段 CIDR（可留空）" FontSize="12" Margin="0,0,0,5"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Border Background="{DynamicResource CardBrush}" CornerRadius="6"
+                                            BorderBrush="{DynamicResource BorderBrush2}" BorderThickness="1"
+                                            Height="34">
+                                        <TextBox x:Name="TxtNetSubnet" Style="{StaticResource ModernTextBox}"
+                                                 BorderThickness="0" Background="Transparent"
+                                                 VerticalContentAlignment="Center" Padding="10,0"
+                                                 TextAlignment="Left"
+                                                 ToolTip="例如 172.30.0.0/24；留空 = 由 wslc 自动分配"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="网关（可留空）" FontSize="12" Margin="0,0,0,5"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Border Background="{DynamicResource CardBrush}" CornerRadius="6"
+                                            BorderBrush="{DynamicResource BorderBrush2}" BorderThickness="1"
+                                            Height="34">
+                                        <TextBox x:Name="TxtNetGateway" Style="{StaticResource ModernTextBox}"
+                                                 BorderThickness="0" Background="Transparent"
+                                                 VerticalContentAlignment="Center" Padding="10,0"
+                                                 TextAlignment="Left"
+                                                 ToolTip="例如 172.30.0.1；留空 = 取网段里第一个可用地址"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="5" Orientation="Horizontal"
+                                            HorizontalAlignment="Left" VerticalAlignment="Bottom">
+                                    <Button Style="{StaticResource PrimaryButton}" Content="创建网络"
+                                            Click="OnCreateNetworkClick"/>
+                                    <Button Style="{StaticResource ToolButton}" Margin="0"
+                                            Content="填入示例" Click="OnFillNetworkSampleClick"
+                                            ToolTip="填一个不与常见网段冲突的示例值"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock x:Name="TxtNetworkHint" FontSize="12" Margin="0,10,0,0"
+                                       TextWrapping="Wrap" LineHeight="19"
+                                       Foreground="{DynamicResource MutedBrush}"
+                                       Text="驱动固定为 bridge；容器创建时可在「新建容器 → 网络」里选择它。"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="14,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="0,0,0,10">
+                                <TextBlock Text="网络列表" Style="{StaticResource SectionTitle}" Margin="0"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <TextBlock x:Name="TxtNetSummary" VerticalAlignment="Center" Margin="0,0,12,0"
+                                               FontSize="12.5" Foreground="{DynamicResource MutedBrush}"/>
+                                    <Button Style="{StaticResource ToolButton}" Content="刷新"
+                                            Click="OnRefreshNetworksClick"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Grid.Row="1">
+                                <DataGrid x:Name="GridNetworks" Style="{StaticResource ModernDataGrid}"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          HeadersVisibility="Column" CanUserAddRows="False"
+                                          SelectionMode="Single" SelectionUnit="FullRow"
+                                          RowHeight="44"
+                                          CanUserSortColumns="False"
+                                          CanUserReorderColumns="False"
+                                          CanUserResizeColumns="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="名称" Width="130" CanUserSort="False"
+                                                                CellStyle="{StaticResource CopyCell}">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Name}"
+                                                               VerticalAlignment="Center" FontSize="12.5"
+                                                               Foreground="{DynamicResource TextBrush}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding BasicTip}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="驱动" Binding="{Binding DriverText}" Width="100"
+                                                            CanUserSort="False"/>
+                                        <DataGridTextColumn Header="网段" Binding="{Binding SubnetText}" Width="140"
+                                                            CanUserSort="False"/>
+                                        <DataGridTextColumn Header="网关" Binding="{Binding GatewayText}" Width="120"
+                                                            CanUserSort="False"/>
+                                        <!-- 关联容器：wslc network inspect 的 Containers 字段，
+                                             只有 inspect 才有（ls 不返回）—— 见 WslcService 顶部注释。 -->
+                                        <DataGridTemplateColumn Header="关联容器" Width="*" CanUserSort="False">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding ContainersText}"
+                                                                   FontSize="12.5"
+                                                                   Foreground="{DynamicResource SubTextBrush}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   ToolTip="{Binding ContainersTip}"/>
+                                                        <TextBlock Text="{Binding CountText}" FontSize="11.5"
+                                                                   Margin="7,0,0,0" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource MutedBrush}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="创建时间" Binding="{Binding Created}" Width="140"
+                                                            CanUserSort="False"/>
+                                        <DataGridTemplateColumn Header="操作" Width="76" CanUserSort="False">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <Button Style="{StaticResource RowDangerButton}" Content="删除"
+                                                            Margin="0"
+                                                            IsEnabled="{Binding CanRemove}"
+                                                            ToolTip="{Binding RemoveTip}"
+                                                            Click="OnNetworkRowRemoveClick"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock Text="还没有读到网络"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13"
+                                           Foreground="{DynamicResource MutedBrush}"
+                                           Visibility="{Binding Items.Count, ElementName=GridNetworks, Converter={StaticResource ZeroVisConv}}"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="14,10"
+                            Visibility="{Binding Text, ElementName=TxtNetworkLog, Converter={StaticResource NonEmptyVisConv}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="110"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="0,0,0,8">
+                                <TextBlock Text="执行日志" Style="{StaticResource SectionTitle}" Margin="0"/>
+                                <Button Style="{StaticResource ToolButton}" Margin="0,0,6,0"
+                                        HorizontalAlignment="Right"
+                                        Content="清空" Click="OnClearNetworkLogClick"/>
+                            </Grid>
+                            <TextBox x:Name="TxtNetworkLog" Grid.Row="1" IsReadOnly="True"
+                                     Background="{DynamicResource LogBgBrush}"
+                                     BorderBrush="{DynamicResource BorderSoftBrush}" BorderThickness="1"
+                                     Padding="12,10" FontFamily="Consolas, Microsoft YaHei UI" FontSize="12.5"
+                                     AcceptsReturn="True" TextWrapping="NoWrap"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     Foreground="{DynamicResource TextBrush}"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- ⑤ 设置与加速 -->
                 <Grid x:Name="PanelSettings" Visibility="Collapsed">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
@@ -837,6 +1044,37 @@
                                 </StackPanel>
                             </Border>
 
+
+                            <!-- 开机自启：注册表 HKCU\...\Run + 上次运行中的容器名单快照 -->
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="18,16">
+                                <StackPanel>
+                                    <TextBlock Text="启动与自启" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12" LineHeight="19"
+                                               Foreground="{DynamicResource SubTextBrush}"
+                                               Text="开启后，登录 Windows 时自动启动本工具，并先拉起 wslc 会话，再按「上次处于运行中」的名单把容器逐个启动。名单在程序每次刷新容器列表、退出以及系统关机时更新。"/>
+
+                                    <CheckBox x:Name="ChkAutoStart" Style="{StaticResource ModernCheckBox}"
+                                              Content="开机自动启动（并恢复上次运行中的容器）"
+                                              Checked="OnAutoStartToggled" Unchecked="OnAutoStartToggled"/>
+                                    <CheckBox x:Name="ChkAutoStartMin" Style="{StaticResource ModernCheckBox}"
+                                              Content="自启时最小化到托盘，不弹出窗口"
+                                              Margin="0,10,0,0"
+                                              ToolTip="只影响开机自启那一次；平时双击图标照常显示窗口"/>
+
+                                    <TextBlock x:Name="TxtAutoStartState" FontSize="12" Margin="0,10,0,0"
+                                               TextWrapping="Wrap" LineHeight="19"
+                                               FontFamily="Consolas, Microsoft YaHei UI"
+                                               Foreground="{DynamicResource InfoBrush}"/>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button Style="{StaticResource ToolButton}" Content="立即试跑一次恢复"
+                                                ToolTip="不重启电脑，现在就按名单拉起一遍容器，用来验证配置是否正确"
+                                                Click="OnTryAutoStartNowClick"/>
+                                        <Button Style="{StaticResource ToolButton}" Margin="0"
+                                                Content="打开名单文件所在目录" Click="OnOpenConfigDirClick"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
 
                             <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="18,16">
                                 <StackPanel>

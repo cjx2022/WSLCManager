@@ -26,10 +26,11 @@ WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），
 | **环境与安装** | 检测 WSL / wslc 环境与版本；**安装**（`wsl --install`）/ 更新稳定版 / 更新预览版；从官方安装包静默安装；跳转 Store / 官方发布页；执行日志 |
 | **容器管理** | 列表**恒含已停止容器**（没有开关去切换），**行内直接显示 CPU / 内存利用率与端口映射**；行内操作：启动 / 停止 / 重启 / 日志 / 终端（shell 可选） / 详情 / 删除；**勾选多选 → 批量启动 / 停止 / 重启 / 删除**；可视化新建容器；**单元格右键复制**（容器名称 / 镜像 / 端口映射） |
 | **容器详情卡片** | 点「详情」或直接点 CPU / 内存单元格：实时性能（2 秒自刷新）+ 基本信息（含 IP / 网关）+ 配置详情(JSON) / 运行日志 |
-| **镜像管理** | **本地索引检索**（见下方说明）+ 本地镜像列表每行带「删除」；拉取（支持自填加速前缀，失败自动回退官方源，**可中途停止**并显示实时速率）；**标注镜像被哪些容器占用** |
+| **镜像管理** | **本地索引检索**（见下方说明）+ 本地镜像列表每行带「删除」；拉取（支持自填加速前缀，失败自动回退官方源，**可中途停止**并显示实时速率）；**标注镜像被哪些容器占用**；**导出选中镜像为 `tar` / 从 `tar` 导入镜像**（不走容器导出的那条链，标签会一起保留） |
+| **网络管理** | 创建 **bridge 网络**并**指定网段 / 网关**；网络列表带**网段、网关、关联容器**（网段与关联容器只有 `network inspect` 才有，工具会自动补齐）；删除前拦住「还挂着容器」与「wslc 自带网络」两种情况；**新建容器时可选择网络** |
 | **备份与清理** | 容器 → `tar` 存档（自动先停、完事恢复运行）+ 配置元数据（`inspect` 原文，恢复时**按原配置**重建：启动命令 / 端口映射 / 环境变量）；`tar` → 镜像导入 + 自动重建容器；**重建会话**（只删 `sessions` 子目录，保留同级的 `settings.yaml`）；**压缩虚拟磁盘**（`diskpart compact`，需 UAC，按真实输出判定成败） |
-| **设置与加速** | 加速前缀（保存即生效，无需重启）、加速地址连通性实测、镜像索引导入导出、重启应用、打开配置目录 |
-| **系统托盘** | 点关闭按钮**最小化到托盘**（不退出），托盘双击恢复，右键菜单可退出 |
+| **设置与加速** | 加速前缀（保存即生效，无需重启）、加速地址连通性实测、镜像索引导入导出、**开机自启**（并拉起上次运行中的容器）、重启应用、打开配置目录 |
+| **系统托盘** | 点关闭按钮**最小化到托盘**（不退出），托盘双击恢复，右键菜单可退出；「已最小化到托盘」的提醒**每次运行只弹一次** |
 
 ### 列表里复制信息（右键）
 
@@ -209,6 +210,46 @@ jc21/xxx:latest →  <前缀>/jc21/xxx:latest         ← 用户命名空间，�
 而未发布端口时列表里的「端口」列是空的，看起来才像「没有地址」。
 只做出网客户端（拉数据、跑任务）可以不填；要对外提供服务就必填。
 
+### 网络管理：自定义网络与网段
+
+「网络管理」页可以建自己的 bridge 网络并指定网段，用来把一组容器隔离在固定网段里
+（例如 `app-net` = `172.30.0.0/24`）：
+
+```
+wslc network create -d bridge --subnet 172.30.0.0/24 --gateway 172.30.0.1 app-net
+```
+
+| 项 | 说明 |
+|---|---|
+| 网段留空 | 由 wslc 自行分配；同一个宿主机上几个网络的网段**不要重叠**，否则容器分不到地址 |
+| 网关留空 | 取网段里第一个可用地址（常见就是 `.1`） |
+| 关联容器列 | 数据来自 `network inspect` 的 `Containers` 字段，悬停可看每个容器在该网络里的 IP |
+| 不能删的网络 | wslc 自带的 `bridge` / `host` / `none` 三个；以及**还挂着容器**的网络（wslc 自己也会拒绝） |
+
+容器要用自定义网络，在「新建容器 → 高级选项 → 网络」里选它；**选「默认」就等于不下发该参数**，
+行为与不设置完全一致。
+
+> wslc 的网络命令侧写：`network ls --format json` 只返回 ID / 名称 / 驱动 / 范围 ——
+> **网段不在里面**，必须再 `network inspect` 一次才有。工具自动做这两步并合并。
+
+### 开机自启与容器恢复
+
+「设置与加速 → 启动与自启」里勾选后，登录 Windows 时自动启动本工具，并：
+
+1. 预热 wslc 会话（WSL 刚起来时会话还没就绪，先敲一条最轻的命令）；
+2. 按名单把上次处于**运行中**的容器逐个 `start`。
+
+名单存在 `%APPDATA%\WSLCManager\autostart-containers.txt`，在三种时机刷新：
+**每次刷新容器列表后 / 退出程序时 / 系统关机（`SessionEnding`）**。
+后者是必需的 —— 关机时窗口不走正常的关闭流程，不挂这个钩子就会丢掉最后一次状态。
+
+| 细节 | 说明 |
+|---|---|
+| 启动项位置 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（**不需要管理员**，可在「任务管理器 → 启动」里看到并禁用） |
+| 是否已开启 | 以**注册表**为准（设置页勾选框直接反映注册表，不在配置文件里另存一份状态） |
+| 自启时最小化 | 可选；默认勾选，即开机时**不弹窗口**，只在托盘图标上提示恢复结果 |
+| 想先验证 | 卡片里的「立即试跑一次恢复」跟真自启**走同一条代码路径**，不用重启电脑就能试 |
+
 ### 删除镜像的语义：可能只摘掉标签
 
 `wslc image rm` 删除**被容器引用**的镜像时**不报错**：
@@ -273,7 +314,7 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 
 ```
 标题栏（logo + 版本 + 最小化/最大化/关闭）
-├ 左侧导航：环境与安装 / 容器管理 / 镜像管理 / 设置与加速   ← 每项带图标
+├ 左侧导航：环境与安装 / 容器管理 / 镜像管理 / 网络管理 / 备份与清理 / 设置与加速   ← 每项带图标
 └ 内容区（表格列固定，不可拖动 / 排序 / 改宽）
 右下角：环境状态指示
 ```
@@ -339,8 +380,9 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 
 - **x64 only**：暂无 ARM64 构建。
 - **Windows only**：`net8.0-windows` + WPF，不做跨平台。
-- **不代管网络**：安装 WSL / 拉取镜像若遇网络问题需自行解决出口。工具只提供**自填**加速前缀，
+- **不代管出口网络**：安装 WSL / 拉取镜像若遇网络问题需自行解决出口。工具只提供**自填**加速前缀，
   且该前缀**只作用于 `wslc pull`**，不会写进任何安装流程。
+  （容器网络本身是**管**的：见「网络管理」页 —— 建 bridge 网络、指定网段、容器选网络。）
 - **受 `wslc` 能力边界约束**：例如 `wslc` 未提供 `pause` / `unpause` 子命令，工具也就没有这两个操作；
   `wslc stats` 本身是快照语义，没有 `--no-stream`。
 - **托盘图标依赖 WinForms**（WPF 无内置托盘 API），故 `UseWindowsForms=true`。
@@ -363,7 +405,7 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 # 编译
 dotnet build -c Release
 
-# 服务层探针（不需要界面，直接验证 CLI 解析）—— 21 节自检
+# 服务层探针（不需要界面，直接验证 CLI 解析）—— 24 节自检
 dotnet run --project _probe
 
 # 发布单文件（框架依赖，约 0.7MB）
@@ -379,18 +421,21 @@ python _tools/make_logo.py
 ```
 WSLCManager/
 ├── Models/        ContainerInfo / ImageInfo / ImageUsage / ContainerStats / ContainerSpec
+│                  NetworkInfo（网络 + 网段 + 关联容器）
 ├── Services/      ProcRunner（进程封装 + 自适应解码）/ TableParser（表格与 NDJSON 解析）
 │                  WslcService（业务）/ InstallService（环境安装检测）
 │                  RestorePlanner（备份元数据 → 容器规格，纯函数，探针可直接喂真实 JSON 断言）
+│                  NetworkValidator（网络名 / CIDR / 网关校验，纯函数）
 │                  ImageSearchService（本地索引检索）/ DownloadProbe（wsl --update 进度旁路）
 ├── Helpers/       ChromeHelper（无边框窗口）/ AppSettings / TextQuality（DPI 自适应排版）
 │                  DiskCompactor（diskpart compact + 真假成功判定）/ NetMeter（拉取速率采样）
+│                  AutoStart（注册表自启项 + 运行中容器名单快照）
 │                  MemoryTrimmer / Converters / TrayIcon / NativeMethods
 ├── Dialogs/       AppDialog / CreateContainerDialog / ContainerDetailDialog
 │                  ContainerLogsDialog / TerminalDialog
 ├── Themes/        Styles.xaml
 ├── Assets/        logo.png（应用内 logo）
-├── _probe/        服务层探针控制台（21 节自检，直接复用主项目源码）
+├── _probe/        服务层探针控制台（24 节自检，直接复用主项目源码）
 ├── _tools/        make_logo.py（品牌图形生成）/ screengrab.py（真实屏幕抓取，验收用）
 ├── LICENSE        MIT
 └── app.ico / app.manifest
@@ -399,7 +444,7 @@ WSLCManager/
 ### 调试参数
 
 ```
-WSLCManager.exe --page=env|container|image|backup|settings 直接打开指定页
+WSLCManager.exe --page=env|container|image|network|backup|settings 直接打开指定页
 WSLCManager.exe --size=WxH                            指定窗口尺寸（含最小宽度下的表现）
 WSLCManager.exe --search=关键字                       启动即检索一次（验收用）
 WSLCManager.exe --dialog=create|detail|logs|terminal|confirm|info  直接打开对应对话框
@@ -414,6 +459,7 @@ WSLCManager.exe --right-copy=<容器名> [--dump-ui=<路径>] 对该行三列各
 WSLCManager.exe --grab                                配合 --screenshot：连 DWM 非客户区一起抓
 WSLCManager.exe --software                            强制软件渲染（低配/远程桌面场景）
 WSLCManager.exe --textmode=display|ideal              强制指定文字排版模式（排查字体发虚用）
+WSLCManager.exe --autostart                           预热会话并按名单恢复容器（注册表自启项用的就是它）
 ```
 
 > `--dump-layout` / `--screenshot` 这类验收参数一律配 `--exit-after-shot` 才能自动退出。
@@ -435,6 +481,11 @@ WSLCManager.exe --textmode=display|ideal              强制指定文字排版�
   可改用「从官方安装包安装」，自行下载官方 `.msi` 后交给工具静默安装。
 - **换了图标但资源管理器里没变** → Windows 图标缓存问题，执行 `ie4uinit.exe -show` 或重启资源管理器。
 - **关不掉程序** → 点关闭是**最小化到托盘**；要退出请右键托盘图标选「退出」。
+- **开了开机自启，但开机后容器没起来** → 在「设置与加速 → 启动与自启」点「立即试跑一次恢复」，
+  它和真自启走同一条路径，日志里会写明哪个容器失败、失败原因是什么；
+  另外确认名单文件里确实有容器（名单为空时自启不会做任何事）。
+- **想知道某个自定义网络的网段** → 「网络管理」页列表的「网段」列；
+  若显示「—」，说明这个网络本来就没有网段（`host` / `none` 就是如此）。
 
 ## 后续规划
 

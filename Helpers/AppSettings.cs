@@ -51,6 +51,16 @@ public static class AppSettings
     /// <summary>性能监控自动刷新周期（毫秒）。</summary>
     public static int StatsIntervalMs { get; set; } = 2000;
 
+    /// <summary>
+    /// 开机自启拉起容器后是否最小化到托盘（只影响开机自启那一次，日常双击照常显示窗口）。
+    ///
+    /// ⚠ 「是否开机自启」本身**不在这里记** —— 事实来源是注册表
+    ///   <c>HKCU\...\CurrentVersion\Run</c> 里那条启动项。两处各记一份必然出现
+    ///   「ini 说开、注册表说关」的矛盾状态，而注册表才是系统真正执行的那个。
+    ///   所以 ini 只保存这个纯 UI 偏好。
+    /// </summary>
+    public static bool AutoStartMinimized { get; set; } = true;
+
     public static void Load()
     {
         try
@@ -102,6 +112,9 @@ public static class AppSettings
                         if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms))
                             StatsIntervalMs = Math.Clamp(ms, 500, 60000);
                         break;
+                    case "autostartminimized":
+                        AutoStartMinimized = val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase);
+                        break;
                 }
             }
         }
@@ -140,7 +153,12 @@ public static class AppSettings
                 "WebSearchUrlTemplate=" + WebSearchUrlTemplate + "\r\n" +
                 "#\r\n" +
                 "# StatsIntervalMs: 性能监控自动刷新周期（毫秒，500~60000）\r\n" +
-                "StatsIntervalMs=" + StatsIntervalMs + "\r\n";
+                "StatsIntervalMs=" + StatsIntervalMs + "\r\n" +
+                "#\r\n" +
+                "# AutoStartMinimized: 1 = 开机自启拉起容器后最小化到托盘（0 = 照常显示窗口）\r\n" +
+                "#                     只影响自启那一次。是否开机自启见注册表：\r\n" +
+                "#                     HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 下的 WSLCManager 项\r\n" +
+                "AutoStartMinimized=" + (AutoStartMinimized ? "1" : "0") + "\r\n";
             File.WriteAllText(Location, text, new UTF8Encoding(false));
         }
         catch { }

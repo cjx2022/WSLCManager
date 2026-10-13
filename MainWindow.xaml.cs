@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<ContainerInfo> _containers = new();
     private readonly ObservableCollection<ImageInfo> _images = new();
     private readonly ObservableCollection<ImageSearchItem> _searchResults = new();
+    private readonly ObservableCollection<NetworkInfo> _networks = new();
     private readonly DispatcherTimer _realtime = new();
 
     private WslEnvStatus _env;
@@ -36,6 +37,24 @@ public partial class MainWindow : Window
     private CancellationTokenSource _statsCts;
     private TrayIcon _tray;
 
+    /// <summary>
+    /// 托盘气泡「已最小化到托盘」只在**本次运行内**弹一次。
+    /// 反复隐藏/恢复时每次都弹，是纯粹的打扰 —— 用户点第二次时早就知道这个行为了。
+    /// </summary>
+    private bool _trayTipShown;
+
+    /// <summary>
+    /// 正在把设置灌进界面。用来抑制「勾选开机自启 → 立刻写注册表」的回调：
+    /// 初始化时把复选框设成当前状态不该被当成一次用户操作。
+    /// </summary>
+    private bool _settingsLoading;
+
+    /// <summary>
+    /// <c>--autostart</c> 时在**启动最早期**取走的容器名单。
+    /// 必须早于任何一次容器刷新 —— 见 OnLoaded 里的说明（晚一步就被刷成空）。
+    /// </summary>
+    private List<string> _pendingAutoStart;
+
     private ContainerInfo _selContainer;
     private ImageInfo _selImage;
 
@@ -43,7 +62,7 @@ public partial class MainWindow : Window
     /// 版本号的**显示兜底**。真正的事实来源是 csproj 的 <c>&lt;Version&gt;</c>（进程序集元数据），
     /// 这里只在「取不到程序集版本」时用（正常构建永远取得到）。改版本时两处一起改。
     /// </summary>
-    internal const string AppVersion = "0.9.1";
+    internal const string AppVersion = "0.9.2";
 
     /// <summary>
     /// 「常用镜像源」预设（设置页的可点按钮）。
@@ -67,6 +86,7 @@ public partial class MainWindow : Window
 
         GridContainers.ItemsSource = _containers;
         GridImages.ItemsSource = _images;
+        GridNetworks.ItemsSource = _networks;
         ListSearchResults.ItemsSource = _searchResults;
 
         _realtime.Interval = TimeSpan.FromMilliseconds(
@@ -84,6 +104,17 @@ public partial class MainWindow : Window
     {
         _ready = true;
         LoadSettingsIntoUi();
+
+        // ⚠ 自启名单必须在**任何一次容器刷新之前**取走。
+        //   RefreshContainersAsync 结尾会用「当前运行中的容器」重写名单文件，而启动早期的
+        //   那几次刷新必然看到空（WSL 还没起来，一个容器都没跑），于是把上次关机留下的名单
+        //   直接擦掉 —— 等 HandleAutoStartAsync 再去读就已经是空的了。
+        //   实测症状：--autostart 跑完，容器一个都没被拉起，名单文件被刷成只剩注释头。
+        _pendingAutoStart = Environment.GetCommandLineArgs()
+            .Any(a => a.Equals(AutoStart.AutoStartArgument, StringComparison.OrdinalIgnoreCase))
+            ? AutoStart.LoadSnapshot()
+            : null;
+
         ApplyMaxIcon();
 
         try
@@ -98,6 +129,15 @@ public partial class MainWindow : Window
             _tray = new TrayIcon("WSLC 容器管理器");
             _tray.ShowRequested += RestoreFromTray;
             _tray.ExitRequested += ExitApp;
+        }
+        catch { }
+
+        // 注销 / 关机时窗口不走 Closing（进程被直接结束）—— 想留下"关机时谁在跑"，
+        // 只能挂在这个事件上。写的是一个几行的文本文件，同步做完来得及。
+        try
+        {
+            if (Application.Current != null)
+                Application.Current.SessionEnding += (s, e) => SaveAutoStartSnapshot();
         }
         catch { }
 
@@ -118,6 +158,10 @@ public partial class MainWindow : Window
         _ = Dispatcher.BeginInvoke(new Action(ApplyStartupDialog), DispatcherPriority.Background);
 
         ApplyStartupDiagnostics();
+
+        // --autostart：由注册表启动项拉起。放在验收参数之后 —— 只带 --autostart 时，
+        // 后面那些验收方法各自会因为"没传对应参数"直接返回，互不干扰。
+        if (!_demoMode) await HandleAutoStartAsync();
 
         // --click-start=<容器名>：走真实 UI 路径点一次「启动」，导出界面文案（见方法注释）
         await ClickStartAsync();
@@ -178,6 +222,7 @@ public partial class MainWindow : Window
         _demoMode = true;
         _containers.Clear();
         _images.Clear();
+        _networks.Clear();
 
         // 关键 1：停掉实时刷新定时器，否则它会在截图前把演示数据换成真实数据
         try { _realtime.Stop(); } catch { }
@@ -219,11 +264,75 @@ public partial class MainWindow : Window
             _containers.Add(c);
         }
 
+        BuildDemoNetworks();
+
         // 状态栏不带本机版本号
         Ui(() => TxtStatus.Text = "就绪");
 
         // 若正停在备份页，把演示容器同步进下拉（页面切换只在进入时刷新一次）
         if (NavBackup.IsChecked == true) { RefreshBackupContainers(); RefreshSessionDiskInfo(); }
+    }
+
+    /// <summary>
+    /// 演示网络。与演示容器对得上（web-frontend/api-server 在 app-net 上），
+    /// 免得截图里出现「有容器连着、但哪个容器都没说」的自相矛盾。
+    /// </summary>
+    private void BuildDemoNetworks()
+    {
+        var bridge = new NetworkInfo
+        {
+            Id = "demo00000000bridge0000000000000000000000000000000000000000000000",
+            Name = "bridge",
+            Driver = "bridge",
+            Scope = "local",
+            Created = "2026-10-12 15:28",
+            Subnet = "172.17.0.0/16",
+            Gateway = "172.17.0.1",
+            DetailLoaded = true
+        };
+        bridge.Containers.Add(new NetworkEndpoint { Name = "redis-cache", Ip = "172.17.0.3/16" });
+        bridge.Containers.Add(new NetworkEndpoint { Name = "postgres-main", Ip = "172.17.0.4/16" });
+        _networks.Add(bridge);
+
+        var host = new NetworkInfo
+        {
+            Id = "demo00000000host000000000000000000000000000000000000000000000000",
+            Name = "host", Driver = "host", Scope = "local",
+            Created = "2026-10-12 15:28", DetailLoaded = true
+        };
+        _networks.Add(host);
+
+        var none = new NetworkInfo
+        {
+            Id = "demo00000000none000000000000000000000000000000000000000000000000",
+            Name = "none", Driver = "null", Scope = "local",
+            Created = "2026-10-12 15:28", DetailLoaded = true
+        };
+        _networks.Add(none);
+
+        var app = new NetworkInfo
+        {
+            Id = "demo0000000000000000000000000000000000000000000000000000000000000a",
+            Name = "app-net", Driver = "bridge", Scope = "local",
+            Created = "2026-10-13 09:41",
+            Subnet = "172.30.0.0/24", Gateway = "172.30.0.1",
+            DetailLoaded = true
+        };
+        app.Containers.Add(new NetworkEndpoint { Name = "web-frontend", Ip = "172.30.0.2/24" });
+        app.Containers.Add(new NetworkEndpoint { Name = "api-server", Ip = "172.30.0.3/24" });
+        _networks.Add(app);
+
+        var db = new NetworkInfo
+        {
+            Id = "demo0000000000000000000000000000000000000000000000000000000000000b",
+            Name = "db-net", Driver = "bridge", Scope = "local",
+            Created = "2026-10-13 09:42",
+            Subnet = "172.31.0.0/24", Gateway = "172.31.0.1",
+            DetailLoaded = true
+        };
+        _networks.Add(db);
+
+        Ui(() => TxtNetSummary.Text = $"{_networks.Count} 个网络");
     }
 
     /// <summary>--fill-demo：往镜像页两个输入框填演示文本，便于截图核对排版（对齐 / 内边距）。</summary>
@@ -734,6 +843,7 @@ public partial class MainWindow : Window
 
         _realtime.Stop();
         try { _statsCts?.Cancel(); } catch { }
+        SaveAutoStartSnapshot();   // 退出前留一份"关机时哪些容器在跑"，供下次开机自启恢复
         try { _tray?.Dispose(); } catch { }
         MemoryTrimmer.Trim();
     }
@@ -742,7 +852,15 @@ public partial class MainWindow : Window
     {
         Hide();
         ShowInTaskbar = false;
-        try { _tray?.ShowBalloon("WSLC 容器管理器", "已最小化到托盘，双击图标可恢复。"); } catch { }
+
+        // 气泡只弹一次：第二次起「已最小化到托盘」是用户已经知道的事实，
+        // 每次都弹等于反复打断。状态栏文字仍然每次都更新（不打扰，但信息在）。
+        if (!_trayTipShown)
+        {
+            _trayTipShown = true;
+            try { _tray?.ShowBalloon("WSLC 容器管理器", "已最小化到托盘，双击图标可恢复。"); } catch { }
+        }
+
         SetStatus("已最小化到系统托盘", "InfoBrush");
     }
 
@@ -780,6 +898,7 @@ public partial class MainWindow : Window
             {
                 case "container": NavContainer.IsChecked = true; break;
                 case "image": NavImage.IsChecked = true; break;
+                case "network": NavNetwork.IsChecked = true; break;
                 case "settings": NavSettings.IsChecked = true; break;
                 case "env": NavEnv.IsChecked = true; break;
                 case "backup": NavBackup.IsChecked = true; break;
@@ -827,7 +946,7 @@ public partial class MainWindow : Window
 
             Window dlg = null;
             if (v == "create")
-                dlg = new CreateContainerDialog(_images) { Owner = this };
+                dlg = new CreateContainerDialog(_images, _networks.Select(n => n.Name)) { Owner = this };
             else if (v == "detail" && _containers.Count > 0)
                 dlg = new ContainerDetailDialog(_containers[0]) { Owner = this };
             else if (v == "logs" && _containers.Count > 0)
@@ -946,10 +1065,12 @@ public partial class MainWindow : Window
         PanelEnv.Visibility = NavEnv.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelContainer.Visibility = NavContainer.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelImage.Visibility = NavImage.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PanelNetwork.Visibility = NavNetwork.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelSettings.Visibility = NavSettings.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelBackup.Visibility = NavBackup.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
 
         if (NavBackup.IsChecked == true) { RefreshBackupContainers(); RefreshSessionDiskInfo(); }
+        if (NavNetwork.IsChecked == true) _ = RefreshNetworksAsync();
 
         if (NavContainer.IsChecked == true)
         {
@@ -1235,6 +1356,9 @@ public partial class MainWindow : Window
 
         if (!raw.Success && raw.ErrorMessage.Length > 0)
             Log("列举容器失败：" + One(raw.ErrorMessage));
+
+        // 名单跟着刷新走：这样「下次开机要拉起谁」始终以最近一次看到的真实状态为准
+        SaveAutoStartSnapshot();
     }
 
     private async System.Threading.Tasks.Task RefreshRealtimeStatsAsync()
@@ -1642,7 +1766,7 @@ public partial class MainWindow : Window
 
     private async void OnCreateContainerClick(object sender, RoutedEventArgs e)
     {
-        var dlg = new CreateContainerDialog(_images) { Owner = this };
+        var dlg = new CreateContainerDialog(_images, _networks.Select(n => n.Name)) { Owner = this };
         if (dlg.ShowDialog() != true) return;
 
         if (!WslcService.Available)
@@ -2405,7 +2529,7 @@ public partial class MainWindow : Window
         var img = _selImage;
         if (img == null) { SetStatus("请先在列表中选择一个镜像", "WarnBrush"); return; }
 
-        var dlg = new CreateContainerDialog(_images) { Owner = this };
+        var dlg = new CreateContainerDialog(_images, _networks.Select(n => n.Name)) { Owner = this };
         dlg.PresetImage(img.Reference);
         if (dlg.ShowDialog() != true) return;
 
@@ -2585,6 +2709,280 @@ public partial class MainWindow : Window
 
     private void OnClearImageLogClick(object sender, RoutedEventArgs e) => TxtImageLog.Clear();
 
+    // ══════════════════════════ 镜像存档：导出 / 导入 tar ══════════════════════════
+    //
+    // 与「备份与清理」页的两条链别混（名字像、产物完全不是一回事）：
+    //   · 这里：`image save -o` / `image load -i` —— 仓库格式的 tar，**保留标签**，
+    //     导回来就是原镜像，可以直接 run。
+    //   · 那边：`container export` / `image import` —— 导的是容器文件系统，**不保留标签**，
+    //     导入后的镜像没有默认启动命令，新建容器时必须手填常驻命令。
+
+    private async void OnExportImageClick(object sender, RoutedEventArgs e)
+    {
+        var img = _selImage;
+        if (img == null) { SetStatus("请先在列表中选择一个镜像", "WarnBrush"); return; }
+        if (!WslcService.Available)
+        {
+            SetStatus("wslc 尚未安装，请先在「环境与安装」页安装或升级 WSL", "WarnBrush");
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出镜像为 tar",
+            FileName = SafeFileName(img.Reference) + ".tar",
+            DefaultExt = ".tar",
+            Filter = "tar 存档 (*.tar)|*.tar|所有文件 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        var target = dlg.FileName;
+
+        // ⚠ 覆盖已有的 tar 是不可逆的（旧的导出会被直接截断），先说清楚再写
+        if (File.Exists(target) &&
+            !AppDialog.Confirm(this, "覆盖现有文件",
+                $"这个位置已经有文件了：\n{target}\n\n继续导出会覆盖它，确定吗？",
+                okText: "覆盖", danger: true))
+            return;
+
+        Ui(() => TxtImageLog.Clear());
+        Log($"导出镜像：{img.Reference}", TxtImageLog);
+        Log($"  输出到：{target}", TxtImageLog);
+
+        SetBusy(true, "正在导出镜像…");
+        var sw = Stopwatch.StartNew();
+        var r = await WslcService.ImageSaveAsync(img.Reference, target,
+            onLine: line => Log(line, TxtImageLog));
+        sw.Stop();
+        SetBusy(false);
+
+        long size = -1;
+        try { if (File.Exists(target)) size = new FileInfo(target).Length; } catch { }
+
+        if (r.Success && size > 0)
+        {
+            Log($"导出完成：{HumanSize(size)}，耗时 {sw.Elapsed.TotalSeconds:F1} 秒。", TxtImageLog);
+            SetStatus($"镜像已导出（{HumanSize(size)}）", "OkBrush");
+        }
+        else
+        {
+            foreach (var line in TableParser.Lines(r.All)) Log(line, TxtImageLog);
+            Log(r.Canceled
+                ? "导出已取消。"
+                : $"导出失败（退出码 {r.ExitCode}）。产物可能只有半截，建议删掉后重试。", TxtImageLog);
+            SetStatus(r.Canceled ? "已取消导出" : "镜像导出失败：" + One(r.All), r.Canceled ? "WarnBrush" : "ErrBrush");
+        }
+    }
+
+    private async void OnImportImageClick(object sender, RoutedEventArgs e)
+    {
+        if (!WslcService.Available)
+        {
+            SetStatus("wslc 尚未安装，请先在「环境与安装」页安装或升级 WSL", "WarnBrush");
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择要导入的镜像 tar",
+            CheckFileExists = true,
+            Filter = "tar 存档 (*.tar)|*.tar|所有文件 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        var file = dlg.FileName;
+        long size = -1;
+        try { size = new FileInfo(file).Length; } catch { }
+
+        Ui(() => TxtImageLog.Clear());
+        Log($"导入镜像：{file}" + (size >= 0 ? $"（{HumanSize(size)}）" : ""), TxtImageLog);
+        Log("  说明：这是仓库格式的 tar，标签会一起恢复（与「备份与清理」导出的容器文件系统不同）。", TxtImageLog);
+
+        SetBusy(true, "正在导入镜像…");
+        var sw = Stopwatch.StartNew();
+        var r = await WslcService.ImageLoadAsync(file, onLine: line => Log(line, TxtImageLog));
+        sw.Stop();
+        SetBusy(false);
+
+        if (r.Success)
+        {
+            // wslc 的成功输出就一行（实测：「已加载映像: nginx-test-…:restored」），
+            // 全量打印即可 —— 顺带避免"只认英文 Loaded"这种本地化坑。
+            foreach (var line in TableParser.Lines(r.All)) Log(line, TxtImageLog);
+            Log($"导入完成，耗时 {sw.Elapsed.TotalSeconds:F1} 秒。", TxtImageLog);
+            SetStatus("镜像已导入", "OkBrush");
+        }
+        else
+        {
+            foreach (var line in TableParser.Lines(r.All)) Log(line, TxtImageLog);
+            Log($"导入失败（退出码 {r.ExitCode}）。", TxtImageLog);
+            SetStatus("镜像导入失败：" + One(r.All), "ErrBrush");
+        }
+
+        await RefreshImagesAsync();
+    }
+
+    /// <summary>字节 → 人类可读。</summary>
+    private static string HumanSize(long bytes)
+    {
+        if (bytes < 0) return "未知";
+        if (bytes < 1024) return bytes + " B";
+        double v = bytes / 1024.0;
+        if (v < 1024) return v.ToString("N1") + " KB";
+        v /= 1024.0;
+        if (v < 1024) return v.ToString("N1") + " MB";
+        return (v / 1024.0).ToString("N2") + " GB";
+    }
+
+    /// <summary>把镜像引用名收成一个可作文件名的字符串（tag 里的 / 与 : 在 Windows 上非法）。</summary>
+    private static string SafeFileName(string reference)
+    {
+        var sb = new StringBuilder();
+        foreach (var ch in (reference ?? "").Trim())
+            sb.Append(char.IsLetterOrDigit(ch) || ch == '.' || ch == '_' || ch == '-' ? ch : '_');
+        var name = sb.ToString().Trim('_', '.');
+        return name.Length == 0 ? "image" : name;
+    }
+
+    // ══════════════════════════ 网络 ══════════════════════════
+    private async void OnRefreshNetworksClick(object sender, RoutedEventArgs e) => await RefreshNetworksAsync();
+
+    private async System.Threading.Tasks.Task RefreshNetworksAsync(bool silent = false)
+    {
+        if (!_ready) return;
+        if (_demoMode) return;   // 同容器/镜像页：演示数据不许被真实刷新覆盖
+
+        if (!WslcService.Available)
+        {
+            if (!silent) SetStatus("wslc 尚未安装，请先在「环境与安装」页安装或升级 WSL", "WarnBrush");
+            return;
+        }
+
+        var (items, raw) = await WslcService.ListNetworksAsync();
+
+        Ui(() =>
+        {
+            if (_demoMode) return;
+            _networks.Clear();
+            foreach (var n in items) _networks.Add(n);
+            TxtNetSummary.Text = items.Count == 0 ? "" : $"{items.Count} 个网络";
+        });
+
+        if (!raw.Success && raw.ErrorMessage.Length > 0)
+        {
+            if (!silent) SetStatus("列举网络失败：" + One(raw.ErrorMessage), "ErrBrush");
+            Log("列举网络失败：" + One(raw.ErrorMessage), TxtNetworkLog);
+        }
+    }
+
+    private void OnFillNetworkSampleClick(object sender, RoutedEventArgs e)
+    {
+        TxtNetName.Text = "app-net";
+        TxtNetSubnet.Text = "172.30.0.0/24";
+        TxtNetGateway.Text = "172.30.0.1";
+        SetStatus("已填入示例，确认无误后点「创建网络」", "InfoBrush");
+    }
+
+    private async void OnCreateNetworkClick(object sender, RoutedEventArgs e)
+    {
+        if (!WslcService.Available)
+        {
+            SetStatus("wslc 尚未安装，请先在「环境与安装」页安装或升级 WSL", "WarnBrush");
+            return;
+        }
+
+        var name = (TxtNetName.Text ?? "").Trim();
+        var subnet = (TxtNetSubnet.Text ?? "").Trim();
+        var gateway = (TxtNetGateway.Text ?? "").Trim();
+
+        if (!NetworkValidator.Validate(name, subnet, gateway, out var why))
+        {
+            SetStatus(why, "WarnBrush");
+            Log("创建网络被拦下：" + why, TxtNetworkLog);
+            return;
+        }
+
+        // 本地先查重：wslc 对同名网络会报错，但错误信息不如这里一句人话清楚
+        if (_networks.Any(n => string.Equals(n.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            var msg = $"已存在同名网络「{name}」，换个名字";
+            SetStatus(msg, "WarnBrush");
+            Log("创建网络被拦下：" + msg, TxtNetworkLog);
+            return;
+        }
+
+        var cmd = "wslc network create -d bridge"
+                  + (subnet.Length > 0 ? $" --subnet {subnet}" : "")
+                  + (gateway.Length > 0 ? $" --gateway {gateway}" : "")
+                  + " " + name;
+
+        Ui(() => TxtNetworkLog.Clear());
+        Log("创建网络：" + cmd, TxtNetworkLog);
+
+        SetBusy(true, "正在创建网络…");
+        var r = await WslcService.NetworkCreateAsync(name, "bridge", subnet, gateway);
+        SetBusy(false);
+
+        foreach (var line in TableParser.Lines(r.All)) Log(line, TxtNetworkLog);
+
+        // 判据看退出码：wslc network create 成功时只在 stdout 打印网络名（实测 exit=0、
+        // 输出就是那一个名字），没有「成功」字样可匹配。
+        if (r.Success)
+        {
+            Log($"已创建网络 {name}。", TxtNetworkLog);
+            SetStatus($"网络 {name} 已创建", "OkBrush");
+            Ui(() => { TxtNetName.Clear(); TxtNetSubnet.Clear(); TxtNetGateway.Clear(); });
+        }
+        else
+        {
+            Log($"创建失败（退出码 {r.ExitCode}）。", TxtNetworkLog);
+            SetStatus("网络创建失败：" + One(r.All), "ErrBrush");
+        }
+
+        await RefreshNetworksAsync();
+    }
+
+    private async void OnNetworkRowRemoveClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.DataContext is not NetworkInfo net) return;
+
+        if (net.IsBuiltIn)
+        {
+            SetStatus($"「{net.Name}」是 wslc 自带网络，不能删除", "WarnBrush");
+            return;
+        }
+
+        if (net.ContainerCount > 0)
+        {
+            AppDialog.Info(this, "网络还在使用中",
+                $"网络「{net.Name}」上还连着 {net.ContainerCount} 个容器：\n\n" +
+                string.Join("、", net.Containers.Select(c => c.Name)) +
+                "\n\n先断开或删除这些容器，再删网络 —— 直接删 wslc 也会拒绝。");
+            return;
+        }
+
+        if (!AppDialog.Confirm(this, "删除网络",
+                $"确定删除网络「{net.Name}」吗？\n\n" +
+                $"网段：{net.SubnetText}　网关：{net.GatewayText}\n" +
+                "删除后容器要重新创建才能接回这个网络。",
+                okText: "删除", danger: true))
+            return;
+
+        SetBusy(true, "正在删除网络…");
+        var r = await WslcService.NetworkRemoveAsync(net.Name);
+        SetBusy(false);
+
+        Log($"删除网络 {net.Name}：" + (r.Success ? "完成" : $"失败（退出码 {r.ExitCode}）"), TxtNetworkLog);
+        foreach (var line in TableParser.Lines(r.All)) Log(line, TxtNetworkLog);
+
+        SetStatus(r.Success ? $"网络 {net.Name} 已删除" : "删除失败：" + One(r.All),
+            r.Success ? "OkBrush" : "ErrBrush");
+
+        await RefreshNetworksAsync();
+    }
+
+    private void OnClearNetworkLogClick(object sender, RoutedEventArgs e) => TxtNetworkLog.Clear();
+
     // ══════════════════════════ 设置 ══════════════════════════
     private void LoadSettingsIntoUi()
     {
@@ -2592,6 +2990,18 @@ public partial class MainWindow : Window
         // 注意：这里绝不能同步调用 wslc（会在 UI 线程阻塞），只用推断出的默认路径
         TxtConfigPath.Text = "配置文件：" + AppSettings.Location +
                              "\r\nwslc 数据目录：" + DefaultWslcDir();
+
+        // 自启勾选框直接反映**注册表**（事实来源），加载期间抑制"勾选即写注册表"的回调 ——
+        // 初始化不是用户操作，不该被当成一次开关。
+        _settingsLoading = true;
+        try
+        {
+            ChkAutoStart.IsChecked = AutoStart.IsEnabled();
+            ChkAutoStartMin.IsChecked = AppSettings.AutoStartMinimized;
+        }
+        finally { _settingsLoading = false; }
+        UpdateAutoStartState();
+
         UpdateIndexInfo();
         UpdateMirrorPreview();
         UpdateSelectedCount();
@@ -2686,6 +3096,7 @@ public partial class MainWindow : Window
     private void OnSaveSettingsClick(object sender, RoutedEventArgs e)
     {
         AppSettings.RegistryMirror = (TxtMirror.Text ?? "").Trim();
+        AppSettings.AutoStartMinimized = ChkAutoStartMin.IsChecked == true;
         AppSettings.Save();
 
         _realtime.Interval = TimeSpan.FromMilliseconds(
@@ -2695,6 +3106,173 @@ public partial class MainWindow : Window
         Log("设置已保存：" + AppSettings.Location);
         Log($"  加速前缀 = {(AppSettings.RegistryMirror.Length == 0 ? "(空，直连官方源)" : AppSettings.RegistryMirror)}");
         Log($"  镜像索引 = {ImageSearchService.IndexSummary}");
+        Log($"  自启时最小化到托盘 = {(AppSettings.AutoStartMinimized ? "是" : "否")}" +
+            $"（是否开机自启见注册表，当前：{(AutoStart.IsEnabled() ? "已启用" : "未启用")}）");
+    }
+
+    // ── 开机自启 ──────────────────────────────────────────────
+
+    private void OnAutoStartToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || _settingsLoading) return;
+
+        bool want = ChkAutoStart.IsChecked == true;
+        var exe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+
+        var (ok, msg) = want ? AutoStart.Enable(exe) : AutoStart.Disable();
+        if (!ok)
+        {
+            // 写不进去就把勾选框拨回真实状态 —— 界面不能停留在一个没生效的"已开启"上
+            _settingsLoading = true;
+            try { ChkAutoStart.IsChecked = AutoStart.IsEnabled(); }
+            finally { _settingsLoading = false; }
+
+            AppDialog.Info(this, "设置失败", "写注册表启动项失败：\n" + msg);
+            SetStatus("开机自启设置失败", "ErrBrush");
+            return;
+        }
+
+        UpdateAutoStartState();
+        Log(want ? "已开启开机自启：" + msg : "已关闭开机自启");
+        SetStatus(want ? "已开启开机自启（登录后自动拉起 wslc 与上次运行中的容器）" : "已关闭开机自启",
+            want ? "OkBrush" : "InfoBrush");
+    }
+
+    private void UpdateAutoStartState()
+    {
+        if (TxtAutoStartState == null) return;
+
+        var cur = AutoStart.CurrentCommandLine();
+        if (cur.Length == 0)
+        {
+            TxtAutoStartState.Text =
+                "当前状态：未启用\r\n" +
+                "注册表项：HKCU\\" + AutoStart.RegistryKeyPath + "（无本程序）";
+            return;
+        }
+
+        var names = AutoStart.LoadSnapshot();
+        TxtAutoStartState.Text =
+            "当前状态：已启用\r\n" +
+            "启动项：" + cur + "\r\n" +
+            "名单文件：" + AutoStart.SnapshotPath + $"（{names.Count} 个容器）";
+    }
+
+    /// <summary>「立即试跑一次恢复」：不重启电脑，就按名单拉起一遍，用来验证配置对不对。</summary>
+    private async void OnTryAutoStartNowClick(object sender, RoutedEventArgs e)
+    {
+        var names = AutoStart.LoadSnapshot();
+        if (names.Count == 0)
+        {
+            SetStatus("名单里没有容器 —— 先在容器页刷新一次列表，或先启动几个容器", "WarnBrush");
+            Log("试跑自启恢复：名单为空，什么都没做。");
+            return;
+        }
+
+        await RunAutoStartRestoreAsync(names, fromTray: false);
+    }
+
+    /// <summary>
+    /// 按名单恢复容器。开机自启与「立即试跑」共用这一条路径（同一份代码，
+    /// 免得「试跑通过、真自启却不成」）。
+    /// </summary>
+    private async System.Threading.Tasks.Task RunAutoStartRestoreAsync(
+        IReadOnlyList<string> names, bool fromTray)
+    {
+        if (names == null || names.Count == 0) return;
+
+        if (!WslcService.Available)
+        {
+            SetStatus("wslc 尚未安装，没法恢复容器", "WarnBrush");
+            return;
+        }
+
+        SetBusy(true, "正在恢复容器…");
+        Log($"开始恢复容器：共 {names.Count} 个（{string.Join("、", names)}）");
+
+        // ① 先预热会话：WSL 刚开机时 wslc 会话还没起来，第一条 start 会顺带拉起它 ——
+        //   但那会把整个会话启动时间算进第一条的超时预算。用最轻的一条命令先敲门。
+        var warm = await WslcService.RawListNetworksAsync();
+        Log("wslc 会话预热：" + (warm.Success ? "就绪" : "失败（" + One(warm.All) + "）"));
+
+        int ok = 0, failed = 0;
+        foreach (var n in names)
+        {
+            var r = await WslcService.StartAsync(n);
+
+            if (r.Success) { ok++; Log($"  {n}：已启动"); }
+            else if ((r.All ?? "").Contains("already running", StringComparison.OrdinalIgnoreCase) ||
+                     (r.All ?? "").Contains("已在运行", StringComparison.Ordinal))
+            {
+                // 本来就在跑 —— 这是成功态，不能算失败（否则每次自启都会虚报一堆失败）
+                ok++; Log($"  {n}：本来就在运行");
+            }
+            else { failed++; Log($"  {n}：启动失败（{One(r.All)}）"); }
+        }
+
+        SetBusy(false);
+        Log($"恢复完成：成功 {ok} 个" + (failed > 0 ? $"，失败 {failed} 个" : "") + "。");
+        SetStatus($"自启恢复：成功 {ok} 个" + (failed > 0 ? $"，失败 {failed} 个" : ""),
+            failed > 0 ? "WarnBrush" : "OkBrush");
+
+        await RefreshContainersAsync(silent: true);
+
+        if (fromTray)
+        {
+            // 自启是后台行为：结果用托盘气泡报一次就够，不弹窗口
+            try
+            {
+                _tray?.ShowBalloon("WSLC 容器管理器",
+                    $"已恢复 {ok} 个容器" + (failed > 0 ? $"，{failed} 个失败" : ""));
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>由 <c>--autostart</c> 触发：恢复容器，并按设置决定是否缩到托盘。</summary>
+    private async System.Threading.Tasks.Task HandleAutoStartAsync()
+    {
+        // ⚠ 守卫必须在这里，不能只靠调用点判断：
+        //   一旦漏判，**普通启动**也会走进来，而下面那句 HideToTray() 会让窗口
+        //   在用户眼前直接消失（表现为"程序启动了但没界面"，且 --screenshot 截出全白图）。
+        if (!Environment.GetCommandLineArgs()
+                .Any(a => a.Equals(AutoStart.AutoStartArgument, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        // 用启动早期取走的那份（_pendingAutoStart）；兜底再读一次文件
+        var names = _pendingAutoStart ?? AutoStart.LoadSnapshot();
+        Log($"开机自启：名单里 {names.Count} 个容器");
+
+        if (AppSettings.AutoStartMinimized)
+        {
+            // 自启应当悄悄把环境拉起来，不该糊一个窗口在用户脸上。
+            // 顺手把 _trayTipShown 置上：_trayTipShown 的气泡是给"用户主动关窗"用的，
+            // 开机时再弹一句"已最小化到托盘"纯属噪音。
+            _trayTipShown = true;
+            HideToTray();
+        }
+
+        if (names.Count > 0) await RunAutoStartRestoreAsync(names, fromTray: true);
+    }
+
+    /// <summary>
+    /// 把「当前处于运行中」的容器名写进自启名单。
+    ///
+    /// 三个时机都要，缺一不可：列表刷新后（名单新鲜）／真正退出时（用户主动关）／
+    /// 系统关机（<c>SessionEnding</c> —— 那时窗口不走 Closing，不挂这个钩子就会丢最后一次状态）。
+    /// </summary>
+    private void SaveAutoStartSnapshot()
+    {
+        if (_demoMode) return;   // 演示数据绝不能写进真实名单
+        try
+        {
+            var running = _containers
+                .Where(c => c.IsRunning && !string.IsNullOrWhiteSpace(c.Name))
+                .Select(c => c.Name)
+                .ToList();
+            AutoStart.SaveSnapshot(running);
+        }
+        catch { }
     }
 
     private void OnOpenConfigDirClick(object sender, RoutedEventArgs e)

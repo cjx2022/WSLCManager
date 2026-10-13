@@ -764,6 +764,337 @@ public static class WslcService
         return Math.Min(ia, ib);
     }
 
+    // ══════════════════ 网络管理（wslc network） ══════════════════
+    //
+    // 2026-10-13 实测（WSL 3.0.1.0）：
+    //   `wslc network create -d bridge --subnet 172.30.0.0/24 --gateway 172.30.0.1 mynet` → exit=0，
+    //   随后 `network inspect mynet -f json` 里 IPAM.Config[0].Subnet/Gateway 与传入值一致。
+    //   —— 网段**是可指定的**。（0.9.1 之前删掉网络模块的理由是「网段不可改」，那条结论不再成立。）
+    //
+    // 两个数据源分工，缺一不可：
+    //   · `network ls --format json`  → NDJSON，只有 ID / 名称 / 驱动 / 范围
+    //   · `network inspect <名...> -f json` → **一个 JSON 数组**，含 IPAM 网段与 Containers
+    // 所以列表必须「先 ls 出名单，再一次性 inspect 补齐详情」。
+    // 顺带一条：三个内置网络（bridge / host / none）的**ID 每次会话重建都会变**，别当稳定主键。
+
+    public static Task<RunResult> RawListNetworksAsync(CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            var variants = new List<string[]>
+            {
+                new[] { "network", "ls" },
+                new[] { "network", "list" },
+            };
+
+            // ① 优先 JSON
+            foreach (var v in variants)
+            {
+                var a = v.ToList();
+                a.Add("--format"); a.Add("json");
+                var rj = ProcRunner.Run(ExePath, a, 25000, ct);
+                if (rj.Success && rj.All.Trim().Length > 0) return rj;
+            }
+            // ② 回退表格
+            RunResult last = null;
+            foreach (var v in variants)
+            {
+                var r = ProcRunner.Run(ExePath, v, 25000, ct);
+                last = r;
+                if (r.Success && r.All.Trim().Length > 0) return r;
+            }
+            return last ?? new RunResult();
+        }, ct);
+
+    /// <summary>批量 inspect 网络（一次可传多个名字，实测返回 JSON 数组）。</summary>
+    public static Task<RunResult> RawInspectNetworksAsync(IEnumerable<string> names,
+        CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            var list = (names ?? Enumerable.Empty<string>())
+                .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).Distinct().ToList();
+            if (list.Count == 0) return new RunResult();
+
+            foreach (var withFormat in new[] { true, false })
+            {
+                var a = new List<string> { "network", "inspect" };
+                a.AddRange(list);
+                if (withFormat) { a.Add("-f"); a.Add("json"); }
+                var r = ProcRunner.Run(ExePath, a, 30000, ct);
+                if (r.Success && r.All.Trim().Length > 0) return r;
+            }
+            return new RunResult();
+        }, ct);
+
+    /// <summary>
+    /// 创建网络。driver 空则交给 wslc 用默认（bridge）；
+    /// subnet / gateway 空则不下发该参数（wslc 自行分配网段）。
+    /// </summary>
+    public static Task<RunResult> NetworkCreateAsync(string name, string driver, string subnet,
+        string gateway, CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+
+            var a = new List<string> { "network", "create" };
+            var d = (driver ?? "").Trim();
+            if (d.Length > 0) { a.Add("-d"); a.Add(d); }
+            var sub = (subnet ?? "").Trim();
+            if (sub.Length > 0) { a.Add("--subnet"); a.Add(sub); }
+            var gw = (gateway ?? "").Trim();
+            if (gw.Length > 0) { a.Add("--gateway"); a.Add(gw); }
+            a.Add((name ?? "").Trim());
+
+            return ProcRunner.Run(ExePath, a, 120000, ct);
+        }, ct);
+
+    /// <summary>删除网络。force 对应 wslc 的 <c>-f</c>（网络不存在时不报错）。</summary>
+    public static Task<RunResult> NetworkRemoveAsync(string name, bool force = true,
+        CancellationToken ct = default)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            var a = new List<string> { "network", "rm" };
+            if (force) a.Add("-f");
+            a.Add((name ?? "").Trim());
+            return ProcRunner.Run(ExePath, a, 60000, ct);
+        }, ct);
+
+    public static async Task<(List<NetworkInfo> Items, RunResult Raw)> ListNetworksAsync(
+        CancellationToken ct = default)
+    {
+        var raw = await RawListNetworksAsync(ct);
+        var items = ParseNetworkList(raw.All);
+
+        // 详情（网段 / 网关 / 关联容器）只能靠 inspect 补 —— 一次把它们全传进去
+        if (items.Count > 0)
+        {
+            var insp = await RawInspectNetworksAsync(items.Select(i => i.Name), ct);
+            if (insp.Success && insp.All.Trim().Length > 0)
+                ApplyNetworkDetails(items, insp.All);
+        }
+        return (items, raw);
+    }
+
+    /// <summary>解析 `network ls` 输出（NDJSON 优先，回退列对齐表格）。独立方法便于离线自检。</summary>
+    internal static List<NetworkInfo> ParseNetworkList(string text)
+    {
+        var res = new List<NetworkInfo>();
+
+        var json = TableParser.ParseJsonLines(text);
+        if (json.Count > 0)
+        {
+            foreach (var d in json)
+            {
+                var n = new NetworkInfo
+                {
+                    Id = TableParser.Pick(d, "ID", "Id"),
+                    Name = TableParser.Pick(d, "NAME", "Name", "名称"),
+                    Driver = TableParser.Pick(d, "DRIVER", "Driver", "驱动程序"),
+                    Scope = TableParser.Pick(d, "SCOPE", "Scope", "范围"),
+                    Created = NetworkInfo.NormCreated(
+                        TableParser.Pick(d, "CREATEDAT", "CREATED", "CreatedAt", "Created", "已创建")),
+                };
+                if (string.IsNullOrWhiteSpace(n.Name) && string.IsNullOrWhiteSpace(n.Id)) continue;
+                if (string.IsNullOrWhiteSpace(n.Name)) n.Name = n.ShortId;
+                res.Add(n);
+            }
+            SortNetworks(res);
+            return res;
+        }
+
+        var (header, rows) = TableParser.ParseAligned(text);
+        var norm = header.Select(TableParser.Normalize).ToArray();
+        foreach (var row in rows)
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < norm.Length; i++) d[norm[i]] = i < row.Length ? row[i] : "";
+
+            var n = new NetworkInfo
+            {
+                Id = TableParser.Pick(d, "ID", "Id", "网络id"),
+                Name = TableParser.Pick(d, "NAME", "Name", "名称"),
+                Driver = TableParser.Pick(d, "DRIVER", "Driver", "驱动程序"),
+                Scope = TableParser.Pick(d, "SCOPE", "Scope", "范围"),
+            };
+            if (string.IsNullOrWhiteSpace(n.Name) && string.IsNullOrWhiteSpace(n.Id)) continue;
+            if (string.IsNullOrWhiteSpace(n.Name)) n.Name = n.ShortId;
+            res.Add(n);
+        }
+        SortNetworks(res);
+        return res;
+    }
+
+    /// <summary>内置三网络固定排在前面，其余按名称；避免用户网络把 bridge/host/none 挤到看不见的地方。</summary>
+    private static void SortNetworks(List<NetworkInfo> list)
+        => list.Sort((a, b) =>
+        {
+            int ra = NetRank(a.Name), rb = NetRank(b.Name);
+            if (ra != rb) return ra.CompareTo(rb);
+            return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
+
+    private static int NetRank(string name) => (name ?? "").ToLowerInvariant() switch
+    {
+        "bridge" => 0,
+        "host" => 1,
+        "none" => 2,
+        _ => 3
+    };
+
+    /// <summary>把 inspect 的详情合并进 ls 出来的列表（按名称匹配，名称缺失时按 ID 前缀兜底）。</summary>
+    internal static void ApplyNetworkDetails(List<NetworkInfo> items, string inspectText)
+    {
+        var byName = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var el in ParseJsonArrayElements(inspectText))
+        {
+            if (el.ValueKind != JsonValueKind.Object) continue;
+            var nm = JsonStr(el, "Name");
+            if (nm.Length > 0) byName[nm] = el;
+            var id = JsonStr(el, "Id");
+            if (id.Length > 0) byId[id] = el;
+        }
+
+        foreach (var n in items)
+        {
+            JsonElement el;
+            bool found = byName.TryGetValue(n.Name, out el);
+            if (!found && n.Id.Length >= 8)
+            {
+                foreach (var kv in byId)
+                    if (kv.Key.StartsWith(n.Id, StringComparison.OrdinalIgnoreCase)) { el = kv.Value; found = true; break; }
+            }
+            if (!found) continue;
+
+            FillNetworkDetail(el, n);
+            n.DetailLoaded = true;
+        }
+    }
+
+    private static void FillNetworkDetail(JsonElement el, NetworkInfo n)
+    {
+        var id = JsonStr(el, "Id");
+        if (id.Length > 0) n.Id = id;
+        var drv = JsonStr(el, "Driver");
+        if (drv.Length > 0) n.Driver = drv;
+        var scope = JsonStr(el, "Scope");
+        if (scope.Length > 0) n.Scope = scope;
+        var created = JsonStr(el, "Created");
+        if (created.Length > 0) n.Created = NetworkInfo.NormCreated(created);
+        if (el.TryGetProperty("Internal", out var it) && it.ValueKind == JsonValueKind.True)
+            n.Internal = true;
+
+        // IPAM.Config 是数组（可能为 null）—— 取第一条带 Subnet 的
+        if (el.TryGetProperty("IPAM", out var ipam) && ipam.ValueKind == JsonValueKind.Object &&
+            ipam.TryGetProperty("Config", out var cfg) && cfg.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var c in cfg.EnumerateArray())
+            {
+                if (c.ValueKind != JsonValueKind.Object) continue;
+                var sub = JsonStr(c, "Subnet");
+                if (sub.Length == 0) continue;
+                n.Subnet = sub;
+                n.Gateway = JsonStr(c, "Gateway");
+                break;
+            }
+        }
+
+        n.Containers.Clear();
+        if (el.TryGetProperty("Containers", out var cs) && cs.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var kv in cs.EnumerateObject())
+            {
+                var ep = new NetworkEndpoint { Id = kv.Name };
+                if (kv.Value.ValueKind == JsonValueKind.Object)
+                {
+                    ep.Name = JsonStr(kv.Value, "Name");
+                    ep.Ip = JsonStr(kv.Value, "IPv4Address");
+                }
+                else if (kv.Value.ValueKind == JsonValueKind.String)
+                {
+                    ep.Name = kv.Value.GetString() ?? "";
+                }
+                if (ep.Name.Length == 0)
+                    ep.Name = ep.Id.Length > 12 ? ep.Id.Substring(0, 12) : ep.Id;
+                n.Containers.Add(ep);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从可能夹带提示文本的输出里取出 JSON 片段，解析成元素列表（数组 → 逐个元素，对象 → 单个）。
+    ///
+    /// ⚠ 必须 <c>Clone()</c>：JsonDocument 一旦 Dispose，它枚举出来的 JsonElement 全部失效
+    ///   （访问会抛 ObjectDisposedException）—— 这里要跨出 using 作用域返回，所以逐个克隆。
+    /// </summary>
+    internal static List<JsonElement> ParseJsonArrayElements(string text)
+    {
+        var res = new List<JsonElement>();
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) return res;
+
+        // 与 ParseNetInfo 同一套截取规则：从更靠前的 '[' / '{' 起，到最后一个配对结尾
+        int start = FirstIndexOf(t, '[', '{');
+        if (start < 0) return res;
+        int end = t.LastIndexOf(t[start] == '[' ? ']' : '}');
+        if (end < start) return res;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(t.Substring(start, end - start + 1));
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Array)
+                foreach (var el in root.EnumerateArray()) res.Add(el.Clone());
+            else if (root.ValueKind == JsonValueKind.Object)
+                res.Add(root.Clone());
+        }
+        catch { /* 解析不了就当没有详情，列表仍可显示基本信息 */ }
+        return res;
+    }
+
+    // ── 镜像存档（导出 / 导入 tar）────────────────────────────────
+    /// <summary>
+    /// 导出镜像为 tar：`wslc image save -o &lt;路径&gt; &lt;镜像&gt;`。
+    ///
+    /// ⚠ 一次只导一个镜像。wslc 的 save 接受多个镜像名，但产物是**单个 tar**，
+    ///   多镜像会让里面出现多个 manifest，再导入时行为不保证 —— 界面按「选中一个导出」设计。
+    /// ⚠ 超时传 0（不超时）：镜像动辄几百 MB ~ 数 GB，固定超时会在慢盘上误杀；
+    ///   中断交给 CancellationToken（用户点「停止」）。
+    /// </summary>
+    public static Task<RunResult> ImageSaveAsync(string image, string outputFile,
+        CancellationToken ct = default, Action<string> onLine = null)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            if (string.IsNullOrWhiteSpace(image)) return new RunResult { ErrorMessage = "没有指定要导出的镜像" };
+            if (string.IsNullOrWhiteSpace(outputFile)) return new RunResult { ErrorMessage = "没有指定输出文件" };
+
+            return ProcRunner.Run(ExePath, BuildImageSaveArgs(image, outputFile), 0, ct, onLine, onLine);
+        }, ct);
+
+    /// <summary>导出参数拼装（抽成纯函数，好让探针断言，不必真跑一次几百 MB 的导出）。</summary>
+    internal static List<string> BuildImageSaveArgs(string image, string outputFile)
+        => new List<string> { "image", "save", "-o", (outputFile ?? "").Trim(), (image ?? "").Trim() };
+
+    /// <summary>从 tar 导入镜像：`wslc image load -i &lt;路径&gt;`（超时理由同 save）。</summary>
+    public static Task<RunResult> ImageLoadAsync(string tarFile,
+        CancellationToken ct = default, Action<string> onLine = null)
+        => Task.Run(() =>
+        {
+            if (!Available) return new RunResult { ErrorMessage = "未找到 wslc.exe" };
+            if (string.IsNullOrWhiteSpace(tarFile)) return new RunResult { ErrorMessage = "没有指定 tar 文件" };
+            if (!File.Exists(tarFile)) return new RunResult { ErrorMessage = "文件不存在：" + tarFile };
+
+            return ProcRunner.Run(ExePath, BuildImageLoadArgs(tarFile), 0, ct, onLine, onLine);
+        }, ct);
+
+    /// <summary>导入参数拼装（同 <see cref="BuildImageSaveArgs"/>，纯函数便于自检）。</summary>
+    internal static List<string> BuildImageLoadArgs(string tarFile)
+        => new List<string> { "image", "load", "-i", (tarFile ?? "").Trim() };
+
     // ── 容器真实运行态（复查「启动成功」到底成没成）──────────────────
     /// <summary>
     /// 查容器的真实运行态。回退链与 <see cref="InspectNetworkAsync"/> 一致 ——

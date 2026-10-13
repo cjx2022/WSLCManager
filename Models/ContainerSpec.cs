@@ -22,6 +22,12 @@ public sealed class ContainerSpec
     public string EntrypointOverride { get; set; } = "";
     public string HostName { get; set; } = "";
 
+    /// <summary>
+    /// 要连接的网络名（对应 <c>--network</c>）。
+    /// 空 = 不下发该参数，走 wslc 默认网络（bridge）—— 与旧版本行为完全一致。
+    /// </summary>
+    public string Network { get; set; } = "";
+
     public List<PortMap> Ports { get; } = new();
     public List<VolumeMap> Volumes { get; } = new();
     public List<EnvVar> Env { get; } = new();
@@ -68,6 +74,8 @@ public sealed class ContainerSpec
         if (!string.IsNullOrWhiteSpace(WorkingDir)) { a.Add("-w"); a.Add(WorkingDir.Trim()); }
         if (!string.IsNullOrWhiteSpace(HostName)) { a.Add("-h"); a.Add(HostName.Trim()); }
         if (!string.IsNullOrWhiteSpace(EntrypointOverride)) { a.Add("--entrypoint"); a.Add(EntrypointOverride.Trim()); }
+        // 网络：留空不下发（= wslc 默认网络），这样「不选」与旧版本行为一致
+        if (!string.IsNullOrWhiteSpace(Network)) { a.Add("--network"); a.Add(Network.Trim()); }
 
         foreach (var p in Ports)
         {

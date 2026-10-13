@@ -21,9 +21,12 @@ public partial class CreateContainerDialog : Window
 
     private bool _ready;
 
+    /// <summary>网络下拉的第一项：选它 = 不下发 <c>--network</c>（wslc 用自己的默认 bridge）。</summary>
+    private const string DefaultNetworkLabel = "默认（bridge）";
+
     public ContainerSpec Result { get; private set; }
 
-    public CreateContainerDialog(IEnumerable<ImageInfo> localImages)
+    public CreateContainerDialog(IEnumerable<ImageInfo> localImages, IEnumerable<string> networks)
     {
         InitializeComponent();
 
@@ -40,6 +43,8 @@ public partial class CreateContainerDialog : Window
             .Take(24)
             .ToList();
 
+        FillNetworks(networks);
+
         _previewTimer.Interval = TimeSpan.FromMilliseconds(400);
         _previewTimer.Tick += (s, e) => UpdatePreview();
         _previewTimer.Start();
@@ -54,6 +59,30 @@ public partial class CreateContainerDialog : Window
         };
 
         Closed += (s, e) => _previewTimer.Stop();
+    }
+
+    /// <summary>
+    /// 填网络下拉。第一项固定是「默认」，后面才是真实网络名 ——
+    /// 默认项**必须存在**：容器不指定网络是完全正常的用法，不能逼用户选一个。
+    /// </summary>
+    private void FillNetworks(IEnumerable<string> networks)
+    {
+        var items = new List<string> { DefaultNetworkLabel };
+        items.AddRange((networks ?? Enumerable.Empty<string>())
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+
+        CmbNetwork.ItemsSource = items;
+        // 在构造函数里设选中项：此时 _ready 还是 false，OnAnyChanged 会被守卫挡掉
+        CmbNetwork.SelectedIndex = 0;
+    }
+
+    private string SelectedNetwork()
+    {
+        var s = CmbNetwork.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        return s == DefaultNetworkLabel ? "" : s;
     }
 
     /// <summary>由「用此镜像新建容器」调用（ShowDialog 之前）。</summary>
@@ -139,7 +168,8 @@ public partial class CreateContainerDialog : Window
             Tty = ChkTty.IsChecked == true,
             Interactive = ChkTty.IsChecked == true,
             RestartPolicy = TxtRestart.Text?.Trim() ?? "",
-            WorkingDir = TxtWorkDir.Text?.Trim() ?? ""
+            WorkingDir = TxtWorkDir.Text?.Trim() ?? "",
+            Network = SelectedNetwork()
         };
 
         foreach (var p in _ports)
