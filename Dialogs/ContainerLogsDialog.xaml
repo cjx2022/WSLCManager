@@ -18,7 +18,7 @@
             BorderBrush="{DynamicResource BorderBrush2}" BorderThickness="1"
             RenderOptions.ClearTypeHint="Enabled">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="26" ShadowDepth="4" Opacity="0.18" Color="#2A3245"/>
+            <DropShadowEffect BlurRadius="26" ShadowDepth="4" Opacity="0.18" Color="{DynamicResource ShadowColor}"/>
         </Border.Effect>
 
         <Grid RenderOptions.ClearTypeHint="Enabled">

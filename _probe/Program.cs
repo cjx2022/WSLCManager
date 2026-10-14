@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using WSLCManager.Helpers;
 using WSLCManager.Models;
 using WSLCManager.Services;
@@ -783,6 +785,159 @@ try
     A23("没有运行中容器时快照解析为空", AutoStart.ParseSnapshot(emptySnap).Count == 0);
 
     W($"  第 23 节小结: {s23pass} PASS / {s23fail} FAIL");
+
+    // ══ 24. 主题：两份调色板对账 + 对比度 ══
+    // 换肤最容易出的两类事故，都不报错、只能靠数值抓：
+    //   ① 某一本 palette 少写一个 key → 切换后那处**静默**回退成默认色（黑字/白底）；
+    //   ② 深色版照抄浅色值、或对比度不够 → 深色下小字看不清。
+    Sec("24. 主题：调色板 key 对账与对比度（数值定案）");
+    int s24pass = 0, s24fail = 0;
+    void A24(string label, bool ok)
+    {
+        if (ok) s24pass++; else s24fail++;
+        W($"  断言 {label,-46}: {(ok ? "PASS" : "!! FAIL")}");
+    }
+
+    string RepoRoot()
+    {
+        var d = new DirectoryInfo(AppContext.BaseDirectory);
+        while (d != null)
+        {
+            if (File.Exists(Path.Combine(d.FullName, "Themes", "Palette.Light.xaml"))) return d.FullName;
+            d = d.Parent;
+        }
+        return null;
+    }
+
+    var repo = RepoRoot();
+    A24("定位到仓库根目录", repo != null);
+
+    if (repo != null)
+    {
+        var lightPath = Path.Combine(repo, "Themes", "Palette.Light.xaml");
+        var darkPath = Path.Combine(repo, "Themes", "Palette.Dark.xaml");
+
+        // key → 色值（渐变取第一个 GradientStop 当代表色）
+        (System.Collections.Generic.Dictionary<string, string> Colors, int Grads) LoadPalette(string path)
+        {
+            var map = new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+            XNamespace xn = "http://schemas.microsoft.com/winfx/2006/xaml";
+            int grads = 0;
+            foreach (var el in XDocument.Load(path).Root.Elements())
+            {
+                var key = el.Attribute(xn + "Key")?.Value;
+                if (key == null) continue;
+
+                if (el.Name.LocalName == "SolidColorBrush") map[key] = el.Attribute("Color")?.Value ?? "";
+                else if (el.Name.LocalName == "Color") map[key] = (el.Value ?? "").Trim();
+                else if (el.Name.LocalName == "LinearGradientBrush")
+                {
+                    map[key] = el.Elements().FirstOrDefault(e => e.Name.LocalName == "GradientStop")
+                                  ?.Attribute("Color")?.Value ?? "";
+                    grads++;
+                }
+            }
+            return (map, grads);
+        }
+
+        var (light, lightGrads) = LoadPalette(lightPath);
+        var (dark, darkGrads) = LoadPalette(darkPath);
+        W($"  浅色调色板: {light.Count} 个 key（含 {lightGrads} 个渐变）");
+        W($"  深色调色板: {dark.Count} 个 key（含 {darkGrads} 个渐变）");
+
+        // ① key 集合必须完全一致
+        var missDark = light.Keys.Where(k => !dark.ContainsKey(k)).ToList();
+        var missLight = dark.Keys.Where(k => !light.ContainsKey(k)).ToList();
+        A24($"深色没漏 key（缺 {missDark.Count} 个）", missDark.Count == 0);
+        if (missDark.Count > 0) W("     缺: " + string.Join(", ", missDark));
+        A24($"浅色没多 key（多 {missLight.Count} 个）", missLight.Count == 0);
+        if (missLight.Count > 0) W("     多: " + string.Join(", ", missLight));
+        A24("两本 key 数量一致", light.Count == dark.Count);
+        A24($"key 数量 ≥ 30（实际 {light.Count}）", light.Count >= 30);
+
+        bool AllHex(System.Collections.Generic.Dictionary<string, string> m)
+            => m.Values.All(v => v.Length == 7 && v[0] == '#' && v.Skip(1).All(Uri.IsHexDigit));
+        A24("浅色值全是 #RRGGBB", AllHex(light));
+        A24("深色值全是 #RRGGBB", AllHex(dark));
+
+        // ② 对比度（WCAG 相对亮度）
+        double Chan(double v)
+        {
+            var s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+        double Lum(string hex) => 0.2126 * Chan(Convert.ToInt32(hex.Substring(1, 2), 16))
+                                + 0.7152 * Chan(Convert.ToInt32(hex.Substring(3, 2), 16))
+                                + 0.0722 * Chan(Convert.ToInt32(hex.Substring(5, 2), 16));
+        double Contrast(string fg, string bg)
+        {
+            double a = Lum(fg), b = Lum(bg);
+            return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+        }
+
+        foreach (var pair in new[] { ("浅色", light), ("深色", dark) })
+        {
+            var name = pair.Item1;
+            var map = pair.Item2;
+            var bg = map["CardBrush"];
+
+            W($"  ── {name}主题（卡片底色 {bg}）──");
+            W($"     正文 {map["TextBrush"]} {Contrast(map["TextBrush"], bg):F2}:1   " +
+              $"次要 {map["SubTextBrush"]} {Contrast(map["SubTextBrush"], bg):F2}:1   " +
+              $"弱化 {map["MutedBrush"]} {Contrast(map["MutedBrush"], bg):F2}:1");
+            W($"     强调 {map["AccentBrush"]} 对底 {Contrast(map["AccentBrush"], bg):F2}:1   " +
+              $"色块文字 {map["OnAccentFgBrush"]} 对底色块 {Contrast(map["OnAccentFgBrush"], map["AccentBrush"]):F2}:1");
+
+            A24($"{name} 正文 ≥ 7", Contrast(map["TextBrush"], bg) >= 7.0);
+            A24($"{name} 次要文字 ≥ 4.5", Contrast(map["SubTextBrush"], bg) >= 4.5);
+            A24($"{name} 弱化文字 ≥ 3", Contrast(map["MutedBrush"], bg) >= 3.0);
+            A24($"{name} 强调色块上的文字 ≥ 4.5",
+                Contrast(map["OnAccentFgBrush"], map["AccentBrush"]) >= 4.5);
+
+            foreach (var k in new[] { "OkBrush", "WarnBrush", "ErrBrush", "InfoBrush" })
+            {
+                var ratio = Contrast(map[k], bg);
+                if (name == "深色") A24($"深色 {k} ≥ 4.5（实际 {ratio:F2}）", ratio >= 4.5);
+                // 浅色的绿/橙对白底只有 3.0~3.4:1，是既有配色（状态圆点为主）。
+                // 不擅自改用户已经习惯的颜色，这里只打印出来留个记录。
+                else W($"     参考 {k} {map[k]} {ratio:F2}:1（既有配色，不判定）");
+            }
+        }
+
+        // ③ 深色不能是"照抄浅色"：关键色要真变了，且明暗方向正确
+        A24("深色 CardBrush ≠ 浅色", dark["CardBrush"] != light["CardBrush"]);
+        A24("深色 TextBrush ≠ 浅色", dark["TextBrush"] != light["TextBrush"]);
+        A24("深色 AccentBrush ≠ 浅色", dark["AccentBrush"] != light["AccentBrush"]);
+        A24("深色底色比浅色底暗", Lum(dark["CardBrush"]) < Lum(light["CardBrush"]));
+        A24("深色下文字比底色亮（否则就是黑字糊在深底上）",
+            Lum(dark["TextBrush"]) > Lum(dark["CardBrush"]));
+        A24("浅色下文字比底色暗", Lum(light["TextBrush"]) < Lum(light["CardBrush"]));
+        A24("深色窗口底比卡片更暗（层次方向对）",
+            Lum(dark["WindowGradient"]) < Lum(dark["CardBrush"]));
+
+        // ④ 回归守卫：任何 xaml 都不许再出现 {StaticResource <调色板key>}
+        //    —— 那种引用在解析时就把对象定死了，换肤时不会跟着更新（且不报错）。
+        var keys = new System.Collections.Generic.HashSet<string>(light.Keys, StringComparer.Ordinal);
+        int stray = 0;
+        var strayWhere = new System.Collections.Generic.List<string>();
+        var xamls = Directory.EnumerateFiles(Path.Combine(repo, "Themes"), "*.xaml")
+            .Concat(Directory.EnumerateFiles(repo, "*.xaml"))
+            .Concat(Directory.EnumerateFiles(Path.Combine(repo, "Dialogs"), "*.xaml"));
+
+        foreach (var f in xamls)
+        {
+            foreach (Match m in Regex.Matches(File.ReadAllText(f), @"\{StaticResource ([A-Za-z0-9_]+)\}"))
+            {
+                if (!keys.Contains(m.Groups[1].Value)) continue;
+                stray++;
+                if (strayWhere.Count < 6) strayWhere.Add(Path.GetFileName(f) + " → " + m.Groups[1].Value);
+            }
+        }
+        A24($"没有静态引用调色板 key（否则换肤不生效）", stray == 0);
+        foreach (var s2 in strayWhere) W("     " + s2);
+
+        W($"  第 24 节小结: {s24pass} PASS / {s24fail} FAIL");
+    }
 
 }
 catch (Exception ex)

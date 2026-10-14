@@ -19,6 +19,18 @@ public partial class App : Application
 
         AppSettings.Load();
 
+        // 主题：必须在**第一个窗口解析资源之前**定下来（StartupUri 会立刻创建 MainWindow）。
+        // 取值优先级：命令行 --theme= > settings.ini。命令行那个只给截图/验收用。
+        var themeArg = e.Args.FirstOrDefault(
+            a => a.StartsWith("--theme=", StringComparison.OrdinalIgnoreCase));
+        bool darkTheme = AppSettings.DarkTheme;
+        if (themeArg != null)
+        {
+            var v = themeArg.Substring("--theme=".Length).Trim().ToLowerInvariant();
+            darkTheme = v == "dark" || v == "深色";
+        }
+        ThemeManager.Apply(darkTheme);
+
         // 软件渲染：不创建 D3D 设备 → 显卡用户态驱动（igd12dxva64/igc64 等约 150MB+）
         // 的页不会被 fault in。必须在创建任何 Window 之前设置，否则无效。
         // 注意：软件渲染下 ClearType 会退化成灰度抗锯齿，中文小字会发虚，

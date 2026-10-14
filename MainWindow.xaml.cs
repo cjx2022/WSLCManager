@@ -62,7 +62,7 @@ public partial class MainWindow : Window
     /// 版本号的**显示兜底**。真正的事实来源是 csproj 的 <c>&lt;Version&gt;</c>（进程序集元数据），
     /// 这里只在「取不到程序集版本」时用（正常构建永远取得到）。改版本时两处一起改。
     /// </summary>
-    internal const string AppVersion = "0.9.2";
+    internal const string AppVersion = "0.9.3";
 
     /// <summary>
     /// 「常用镜像源」预设（设置页的可点按钮）。
@@ -115,6 +115,8 @@ public partial class MainWindow : Window
             ? AutoStart.LoadSnapshot()
             : null;
 
+        // 按钮文案按 ThemeManager 的实际状态来（启动时的 --theme= 可能覆盖了配置值）
+        UpdateThemeButton();
         ApplyMaxIcon();
 
         try
@@ -1085,6 +1087,33 @@ public partial class MainWindow : Window
     }
 
     // ══════════════════════════ 环境 ══════════════════════════
+    // ── 主题切换（左下角）──────────────────────────────────────
+    private void OnToggleThemeClick(object sender, RoutedEventArgs e)
+    {
+        bool dark = ThemeManager.Toggle();
+
+        // 立即落盘：这是"下次启动还要不要"的偏好，不该等用户另点「保存设置」——
+        // 而且它跟设置页里那些输入框互不干扰（Save() 写的是 AppSettings 的静态值）。
+        AppSettings.DarkTheme = dark;
+        AppSettings.Save();
+
+        UpdateThemeButton();
+        SetStatus($"已切换到{(dark ? "深色" : "浅色")}主题", "InfoBrush");
+    }
+
+    /// <summary>
+    /// 按钮文案写的是**点下去会变成什么**（不是当前状态），配月亮/太阳图标一起看不会歧义。
+    /// </summary>
+    private void UpdateThemeButton()
+    {
+        if (TxtTheme == null || IcoTheme == null || BtnTheme == null) return;
+
+        bool dark = ThemeManager.IsDark;
+        IcoTheme.Text = dark ? "\uE706" : "\uE708";    // E706 亮度(太阳) / E708 月亮
+        TxtTheme.Text = dark ? "浅色模式" : "深色模式";
+        BtnTheme.ToolTip = dark ? "切换到浅色主题" : "切换到深色主题";
+    }
+
     private async void OnDetectClick(object sender, RoutedEventArgs e) => await DetectAsync();
 
     private async System.Threading.Tasks.Task DetectAsync()

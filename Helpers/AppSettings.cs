@@ -61,6 +61,11 @@ public static class AppSettings
     /// </summary>
     public static bool AutoStartMinimized { get; set; } = true;
 
+    /// <summary>
+    /// 深色主题（false = 浅色，默认）。左下角的切换按钮会写这里，下次启动沿用。
+    /// </summary>
+    public static bool DarkTheme { get; set; } = false;
+
     public static void Load()
     {
         try
@@ -115,6 +120,9 @@ public static class AppSettings
                     case "autostartminimized":
                         AutoStartMinimized = val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase);
                         break;
+                    case "darktheme":
+                        DarkTheme = val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase);
+                        break;
                 }
             }
         }
@@ -158,7 +166,10 @@ public static class AppSettings
                 "# AutoStartMinimized: 1 = 开机自启拉起容器后最小化到托盘（0 = 照常显示窗口）\r\n" +
                 "#                     只影响自启那一次。是否开机自启见注册表：\r\n" +
                 "#                     HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 下的 WSLCManager 项\r\n" +
-                "AutoStartMinimized=" + (AutoStartMinimized ? "1" : "0") + "\r\n";
+                "AutoStartMinimized=" + (AutoStartMinimized ? "1" : "0") + "\r\n" +
+                "#\r\n" +
+                "# DarkTheme: 1 = 深色主题（0 = 浅色）。左下角按钮切换后写入这里，下次启动沿用\r\n" +
+                "DarkTheme=" + (DarkTheme ? "1" : "0") + "\r\n";
             File.WriteAllText(Location, text, new UTF8Encoding(false));
         }
         catch { }

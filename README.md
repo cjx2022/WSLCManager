@@ -11,7 +11,12 @@ WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），
 > **非官方工具**：本项目是独立第三方实现，与微软及任何镜像服务商**均无隶属或背书关系**。
 > `WSL` / `wslc` 是微软的产品；本工具只是调用它们的命令行接口。
 
-![WSLCManager 主界面](docs/screenshot-container.png)
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshot-container.png" alt="浅色主题"><br><sub>浅色主题（默认）</sub></td>
+<td width="50%"><img src="docs/screenshot-dark.png" alt="深色主题"><br><sub>深色主题</sub></td>
+</tr>
+</table>
 
 ## 这是什么
 
@@ -31,6 +36,7 @@ WSL 容器（`wslc`）的可视化管理工具。C# + WPF（net8.0-windows），
 | **备份与清理** | 容器 → `tar` 存档（自动先停、完事恢复运行）+ 配置元数据（`inspect` 原文，恢复时**按原配置**重建：启动命令 / 端口映射 / 环境变量）；`tar` → 镜像导入 + 自动重建容器；**重建会话**（只删 `sessions` 子目录，保留同级的 `settings.yaml`）；**压缩虚拟磁盘**（`diskpart compact`，需 UAC，按真实输出判定成败） |
 | **设置与加速** | 加速前缀（保存即生效，无需重启）、加速地址连通性实测、镜像索引导入导出、**开机自启**（并拉起上次运行中的容器）、重启应用、打开配置目录 |
 | **系统托盘** | 点关闭按钮**最小化到托盘**（不退出），托盘双击恢复，右键菜单可退出；「已最小化到托盘」的提醒**每次运行只弹一次** |
+| **深浅色主题** | **浅色 / 深色**两套主题，左下角一键切换（立即生效、记住选择）；对比度按数值定标，不靠肉眼调 |
 
 ### 列表里复制信息（右键）
 
@@ -169,6 +175,35 @@ jc21/xxx:latest →  <前缀>/jc21/xxx:latest         ← 用户命名空间，�
 | **`WindowChrome`** | ✅ 整个窗口都是客户区，色带与非客户区彻底消失 |
 
 同时用 `DWMWA_WCP_DONOTROUND` 关掉了 Win11 默认圆角（四角露出桌面看起来像"缺角"）。
+
+### 浅色 / 深色主题
+
+左下角的按钮一键切换，**立即生效**并写入配置（`%APPDATA%\WSLCManager\settings.ini` 的 `DarkTheme`），下次启动沿用。
+
+| 项 | 说明 |
+|---|---|
+| 切换点 | 左侧导航**左下角**。它不切换内容区，所以刻意**不在导航组里** —— 是个独立开关 |
+| 按钮文案 | 写的是**点下去会变成什么**（当前浅色 → 显示「深色模式」），配月亮 / 太阳图标不会歧义 |
+| 实现 | 两份调色板 `Themes/Palette.Light.xaml` / `Palette.Dark.xaml`，key 一一对应；切换 = 整本替换字典 |
+| 为什么能立刻变 | 所有颜色引用都走 `{DynamicResource}`。`{StaticResource}` 在解析时就把对象定死了，换字典不会更新（探针第 24 节会扫这个） |
+| 窗口外框 | 无边框窗口的标题栏条带由 DWM 绘制、不经过资源系统，切换时单独通知它 —— 否则深色下窗口顶部会留一条浅色带 |
+
+**深色不是把浅色取反**：层次靠亮度差（窗口底最暗 → 卡片次之 → 悬停/内嵌条最亮）；
+语义色（成功 / 警告 / 错误 / 强调）整体提亮；强调色块上的文字**反过来用深色**
+（亮蓝底配白字只有 3.2:1，是"深色主题做糊"的典型）。
+
+对比度按 WCAG 相对亮度算，有硬指标，探针逐色断言：
+
+| 用途 | 要求 | 浅色实测 | 深色实测 |
+|---|---|---|---|
+| 正文 | ≥ 7:1 | 17.8:1 | 13.1:1 |
+| 次要文字 | ≥ 4.5:1 | 6.5:1 | 7.3:1 |
+| 弱化文字 | ≥ 3:1 | 3.8:1 | 4.3:1 |
+| 强调色块上的文字 | ≥ 4.5:1 | 4.6:1 | 6.0:1 |
+| 状态色（成功 / 警告 / 错误） | ≥ 4.5:1 | 2.9~4.0:1 | 5.8~8.5:1 |
+
+> ⚠ 浅色的成功绿 / 警告橙对白底只有 2.9~3.4:1（历史上以状态圆点为主）—— 探针里作**参考项**打印、不判定。
+> 想调深就把 `Palette.Light.xaml` 里的 `OkBrush` / `WarnBrush` 改暗一点，但那会改变现有视觉，所以没有擅自改。
 
 ### 容器网络
 
@@ -407,7 +442,7 @@ MIT License，著作权归 **billchen**（见 [LICENSE](LICENSE)）。
 # 编译
 dotnet build -c Release
 
-# 服务层探针（不需要界面，直接验证 CLI 解析）—— 25 节自检
+# 服务层探针（不需要界面，直接验证 CLI 解析）—— 26 节自检
 dotnet run --project _probe
 
 # 发布单文件（框架依赖，约 0.7MB）
@@ -429,15 +464,16 @@ WSLCManager/
 │                  RestorePlanner（备份元数据 → 容器规格，纯函数，探针可直接喂真实 JSON 断言）
 │                  NetworkValidator（网络名 / CIDR / 网关校验，纯函数）
 │                  ImageSearchService（本地索引检索）/ DownloadProbe（wsl --update 进度旁路）
-├── Helpers/       ChromeHelper（无边框窗口）/ AppSettings / TextQuality（DPI 自适应排版）
+├── Helpers/       ChromeHelper（无边框窗口 + DWM 主题同步）/ AppSettings / TextQuality（DPI 自适应排版）
 │                  DiskCompactor（diskpart compact + 真假成功判定）/ NetMeter（拉取速率采样）
-│                  AutoStart（注册表自启项 + 运行中容器名单快照）
+│                  AutoStart（注册表自启项 + 运行中容器名单快照）/ ThemeManager（浅色↔深色换字典）
 │                  MemoryTrimmer / Converters / TrayIcon / NativeMethods
 ├── Dialogs/       AppDialog / CreateContainerDialog / ContainerDetailDialog
 │                  ContainerLogsDialog / TerminalDialog
-├── Themes/        Styles.xaml
+├── Themes/        Palette.Light.xaml / Palette.Dark.xaml（两份 key 一一对应的调色板）
+│                  Styles.xaml（样式，颜色一律 {DynamicResource} 引用调色板）
 ├── Assets/        logo.png（应用内 logo）
-├── _probe/        服务层探针控制台（25 节自检，直接复用主项目源码）
+├── _probe/        服务层探针控制台（26 节自检，直接复用主项目源码）
 ├── _tools/        make_logo.py（品牌图形生成）/ screengrab.py（真实屏幕抓取，验收用）
 ├── LICENSE        MIT
 └── app.ico / app.manifest
@@ -459,6 +495,7 @@ WSLCManager.exe --dump-layout=<路径> [--exit-after-shot] 导出关键控件的
 WSLCManager.exe --click-start=<容器名> [--dump-ui=<路径>] 在真实界面上点一次该行的「启动」，导出界面文案
 WSLCManager.exe --right-copy=<容器名> [--dump-ui=<路径>] 对该行三列各发一次真实右键，断言剪贴板内容与状态栏
 WSLCManager.exe --grab                                配合 --screenshot：连 DWM 非客户区一起抓
+WSLCManager.exe --theme=light|dark                     强制指定主题（截图/验收用，覆盖配置值）
 WSLCManager.exe --software                            强制软件渲染（低配/远程桌面场景）
 WSLCManager.exe --textmode=display|ideal              强制指定文字排版模式（排查字体发虚用）
 WSLCManager.exe --autostart                           预热会话并按名单恢复容器（注册表自启项用的就是它）

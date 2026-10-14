@@ -5,6 +5,9 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
+                <!-- ⚠ 第 0 本必须是调色板：ThemeManager 按**索引**替换它（约定见该文件注释）。
+                     顺序写反 = 换错字典，而且不会报错，只是没反应。 -->
+                <ResourceDictionary Source="Themes/Palette.Light.xaml"/>
                 <ResourceDictionary Source="Themes/Styles.xaml"/>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

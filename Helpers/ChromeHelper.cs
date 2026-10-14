@@ -130,17 +130,12 @@ public static class ChromeHelper
 
             // 直角窗口：Win11 默认会给窗口加圆角，四角会露出后面的桌面，
             // 看起来像"缺角"。用 DWMWA_WCP_DONOTROUND(1) 关掉。
-            int round = 1, dark = 0;
+            int round = 1;
             DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
-            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
 
-            // 非客户区颜色对齐窗口背景。
-            // 注：试过 DWMWA_NCRENDERING_POLICY=DISABLED，那样 DWM 干脆不画这段，
-            // PrintWindow 会抓到未初始化的灰色，反而更明显，故不用。
-            // 真正消除顶部色带靠的是 WindowChrome（见 MainWindow.xaml）。
-            int chrome = 0x00FBFCFD;   // COLORREF(BGR) = WindowGradient 起点 #FBFCFD
-            DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref chrome, sizeof(int));
-            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref chrome, sizeof(int));
+            // 标题栏条带 / 窗口边线的颜色与深浅标志：**必须跟随主题**。
+            // 否则深色主题下窗口顶部会留一条浅色带（DWM 仍按浅色在画）。
+            ApplyDwmTheme(w, ThemeManager.IsDark);
 
             HwndSource.FromHwnd(hwnd)?.AddHook((IntPtr h, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
             {
@@ -159,6 +154,35 @@ public static class ChromeHelper
             });
         };
     }
+
+    /// <summary>
+    /// 让 DWM 绘制的非客户区跟随主题：深浅标志 + 标题栏 / 窗口边线颜色。
+    ///
+    /// 必须在**句柄创建之后**调用；换主题时对每个已打开的窗口再调一次
+    /// （<see cref="ThemeManager.Apply"/> 负责遍历）。
+    /// 注：试过 DWMWA_NCRENDERING_POLICY=DISABLED，那样 DWM 干脆不画这段，
+    /// PrintWindow 会抓到未初始化的灰色，反而更明显，故不用；
+    /// 真正消除顶部色带靠的是 WindowChrome（见 MainWindow.xaml）。
+    /// </summary>
+    public static void ApplyDwmTheme(Window w, bool dark)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(w).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            int flag = dark ? 1 : 0;
+            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref flag, sizeof(int));
+
+            int chrome = ToColorRef(ThemeManager.WindowBaseColor());
+            DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref chrome, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref chrome, sizeof(int));
+        }
+        catch { /* 旧版 Windows 上这些属性可能不存在，忽略即可 */ }
+    }
+
+    /// <summary>Color → Win32 COLORREF（0x00BBGGRR —— 顺序是 BGR，不是 RGB）。</summary>
+    private static int ToColorRef(Color c) => (c.B << 16) | (c.G << 8) | c.R;
 
     private static int HitTest(Window w, IntPtr lParam, double captionHeight,
                                List<FrameworkElement> interactive, double border)
