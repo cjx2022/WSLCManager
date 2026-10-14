@@ -495,6 +495,7 @@ WSLCManager.exe --dump-layout=<路径> [--exit-after-shot] 导出关键控件的
 WSLCManager.exe --click-start=<容器名> [--dump-ui=<路径>] 在真实界面上点一次该行的「启动」，导出界面文案
 WSLCManager.exe --right-copy=<容器名> [--dump-ui=<路径>] 对该行三列各发一次真实右键，断言剪贴板内容与状态栏
 WSLCManager.exe --grab                                配合 --screenshot：连 DWM 非客户区一起抓
+WSLCManager.exe --toggle-theme                         对左下角的主题按钮发一次真实点击（验收用）
 WSLCManager.exe --theme=light|dark                     强制指定主题（截图/验收用，覆盖配置值）
 WSLCManager.exe --software                            强制软件渲染（低配/远程桌面场景）
 WSLCManager.exe --textmode=display|ideal              强制指定文字排版模式（排查字体发虚用）

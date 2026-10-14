@@ -171,6 +171,9 @@ public partial class MainWindow : Window
         // --right-copy=<容器名>：在真实界面上对三列各发一次右键，导出剪贴板内容与状态栏回执
         await RightCopyCheckAsync();
 
+        // --toggle-theme：在真实界面上对左下角按钮发一次 Click（验收用，见方法注释）
+        ApplyStartupThemeToggle();
+
         await DumpLayoutAsync();
         await HandleScreenshotAsync();
 
@@ -1099,6 +1102,31 @@ public partial class MainWindow : Window
 
         UpdateThemeButton();
         SetStatus($"已切换到{(dark ? "深色" : "浅色")}主题", "InfoBrush");
+    }
+
+    /// <summary>
+    /// --toggle-theme：对左下角那个按钮**发一次真实的 Click 事件**，用来验收整条链
+    /// 「按钮 → XAML 里的 Click 绑定 → 换肤 + 落盘 + 按钮文案」。
+    ///
+    /// 为什么不直接调 <c>ThemeManager.Apply</c>：那样验证的是"换字典"这一件事，
+    /// 而 XAML 里 Click 没绑上、按钮被裁掉、文案没更新，全都能照样通过 —— 典型假绿。
+    /// </summary>
+    private void ApplyStartupThemeToggle()
+    {
+        if (!Environment.GetCommandLineArgs()
+                .Any(a => a.Equals("--toggle-theme", StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        try
+        {
+            BtnTheme.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Log($"--toggle-theme：点击后 ThemeManager.IsDark={ThemeManager.IsDark}，" +
+                $"按钮文案=\"{TxtTheme.Text}\"，状态栏=\"{TxtStatus.Text}\"");
+        }
+        catch (Exception ex)
+        {
+            Log("--toggle-theme 失败：" + ex.Message);
+        }
     }
 
     /// <summary>
