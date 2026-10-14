@@ -119,11 +119,7 @@ public partial class MainWindow : Window
         UpdateThemeButton();
         ApplyMaxIcon();
 
-        try
-        {
-            ImgLogo.Source = new BitmapImage(new Uri("pack://application:,,,/Assets/logo.png"));
-        }
-        catch { }
+        ApplyLogo();
 
         // 系统托盘（关闭窗口时最小化到后台）
         try
@@ -175,6 +171,7 @@ public partial class MainWindow : Window
         ApplyStartupThemeToggle();
 
         await DumpLayoutAsync();
+        DumpTheme();                       // 切到网络页量「中轴/基线」；必须在截图之前（截图那步可能直接退进程）
         await HandleScreenshotAsync();
 
         // 兜底：只带 --dump-layout / --textmode 而不带 --screenshot 时，
@@ -434,6 +431,91 @@ public partial class MainWindow : Window
         sb.AppendLine();
         AppendGridReport(sb, GridContainers, "容器列表");
         AppendGridReport(sb, GridImages, "镜像列表");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// --dump-theme=&lt;路径&gt;：把主题状态与"对齐类"控件的**真实矩形**写出来。
+    ///
+    /// 为什么单独一个参数、不塞进 --dump-layout：量网络页必须先切到那一页
+    /// （Collapsed 的控件 ActualWidth=0），而切页会干扰紧随其后的截图 —— 两件事分开。
+    /// 量完自动切回原来的页，不影响别的步骤。
+    /// </summary>
+    private void DumpTheme()
+    {
+        var arg = Environment.GetCommandLineArgs()
+            .FirstOrDefault(a => a.StartsWith("--dump-theme=", StringComparison.OrdinalIgnoreCase));
+        if (arg == null) return;
+
+        var path = arg.Substring("--dump-theme=".Length).Trim().Trim('"');
+        if (path.Length == 0) return;
+
+        Ui(() =>
+        {
+            var navs = new[] { NavEnv, NavContainer, NavImage, NavNetwork, NavBackup, NavSettings };
+            var prev = navs.FirstOrDefault(r => r.IsChecked == true);
+
+            NavNetwork.IsChecked = true;
+            UpdateLayout();
+            var report = BuildThemeReport();
+
+            if (prev != null && prev != NavNetwork) prev.IsChecked = true;   // 恢复页面
+            UpdateLayout();
+
+            try { File.WriteAllText(path, report, new UTF8Encoding(false)); } catch { }
+        });
+    }
+
+    private Rect RectOf(FrameworkElement el)
+    {
+        if (el == null || el.ActualWidth <= 0 || el.ActualHeight <= 0) return Rect.Empty;
+        var p = el.TransformToAncestor(this).Transform(new Point(0, 0));
+        return new Rect(p.X, p.Y, el.ActualWidth, el.ActualHeight);
+    }
+
+    private string BuildThemeReport()
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("== 主题状态 ==");
+        sb.AppendLine($"  ThemeManager.IsDark = {ThemeManager.IsDark}");
+        // 图标是 Segoe MDL2 的私用区字符（U+E706/E708），直接打出来终端是空白 ——
+        // 输出码点，免得看报告的人以为"图标没设上"。
+        var icon = IcoTheme?.Text ?? "";
+        sb.AppendLine($"  切换按钮图标        = U+{(icon.Length > 0 ? ((int)icon[0]).ToString("X4") : "----")}" +
+                      "   (E708 月亮 / E706 太阳)");
+        sb.AppendLine($"  切换按钮提示        = \"{BtnTheme?.ToolTip}\"");
+        var logoUri = (ImgLogo?.Source as BitmapImage)?.UriSource?.OriginalString ?? "(无)";
+        sb.AppendLine($"  标题栏 logo         = {logoUri.Split('/').Last()}");
+
+        sb.AppendLine();
+        sb.AppendLine("== 左下角按钮 vs 右下角状态（应在同一条基线上）==");
+        var b = RectOf(BtnTheme);
+        var s = RectOf(ElpStatus);
+        if (!b.IsEmpty && !s.IsEmpty)
+        {
+            double bc = b.Y + b.Height / 2, sc = s.Y + s.Height / 2;
+            sb.AppendLine($"  主题按钮  x={b.X:0.#}  y={b.Y:0.#}  {b.Width:0.#}×{b.Height:0.#}   中心 y={bc:0.#}");
+            sb.AppendLine($"  状态圆点  x={s.X:0.#}  y={s.Y:0.#}  {s.Width:0.#}×{s.Height:0.#}   中心 y={sc:0.#}");
+            sb.AppendLine($"  中心差    |Δcy| = {Math.Abs(bc - sc):0.#} px  →  " +
+                          $"{(Math.Abs(bc - sc) <= 2 ? "同基线 PASS" : "不在同一条线 !!")}");
+        }
+        else sb.AppendLine("  !! 量不到（控件未布局）");
+
+        sb.AppendLine();
+        sb.AppendLine("== 网络页「创建网络」行：输入框 vs 按钮 的中轴 ==");
+        var box = RectOf(TxtNetName?.Parent as FrameworkElement);
+        var btn = RectOf(BtnCreateNetwork);
+        if (!box.IsEmpty && !btn.IsEmpty)
+        {
+            double bc = box.Y + box.Height / 2, nc = btn.Y + btn.Height / 2;
+            sb.AppendLine($"  输入框 Border   y={box.Y:0.#}~{box.Y + box.Height:0.#}  h={box.Height:0.#}   中心 y={bc:0.#}");
+            sb.AppendLine($"  「创建网络」按钮 y={btn.Y:0.#}~{btn.Y + btn.Height:0.#}  h={btn.Height:0.#}   中心 y={nc:0.#}");
+            sb.AppendLine($"  中轴差  |Δcy| = {Math.Abs(bc - nc):0.#} px  →  " +
+                          $"{(Math.Abs(bc - nc) <= 2 ? "与输入框同轴 PASS" : "偏轴 !!")}");
+        }
+        else sb.AppendLine("  !! 量不到（控件未布局）");
+
         return sb.ToString();
     }
 
@@ -1100,8 +1182,24 @@ public partial class MainWindow : Window
         AppSettings.DarkTheme = dark;
         AppSettings.Save();
 
+        ApplyLogo();
         UpdateThemeButton();
         SetStatus($"已切换到{(dark ? "深色" : "浅色")}主题", "InfoBrush");
+    }
+
+    /// <summary>
+    /// 标题栏 logo 按主题换图。
+    /// 原素材是**深海军蓝**线条，在深色底上几乎看不见（用户反馈的第一条）；
+    /// 两份 PNG 只差线色（深色那份改成亮蓝），直接换 Source 比运行时改像素简单可控。
+    /// </summary>
+    private void ApplyLogo()
+    {
+        try
+        {
+            var file = ThemeManager.IsDark ? "logo-on-dark.png" : "logo.png";
+            ImgLogo.Source = new BitmapImage(new Uri("pack://application:,,,/Assets/" + file));
+        }
+        catch { }
     }
 
     /// <summary>
@@ -1121,7 +1219,7 @@ public partial class MainWindow : Window
         {
             BtnTheme.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             Log($"--toggle-theme：点击后 ThemeManager.IsDark={ThemeManager.IsDark}，" +
-                $"按钮文案=\"{TxtTheme.Text}\"，状态栏=\"{TxtStatus.Text}\"");
+                $"按钮提示=\"{BtnTheme.ToolTip}\"，状态栏=\"{TxtStatus.Text}\"");
         }
         catch (Exception ex)
         {
@@ -1130,15 +1228,15 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 按钮文案写的是**点下去会变成什么**（不是当前状态），配月亮/太阳图标一起看不会歧义。
+    /// 按钮只有一个图标 + 悬停提示。图标表示**点下去会变成什么**：
+    /// 当前深色 → 显示太阳（点它回浅色）；当前浅色 → 显示月亮。
     /// </summary>
     private void UpdateThemeButton()
     {
-        if (TxtTheme == null || IcoTheme == null || BtnTheme == null) return;
+        if (IcoTheme == null || BtnTheme == null) return;
 
         bool dark = ThemeManager.IsDark;
         IcoTheme.Text = dark ? "\uE706" : "\uE708";    // E706 亮度(太阳) / E708 月亮
-        TxtTheme.Text = dark ? "浅色模式" : "深色模式";
         BtnTheme.ToolTip = dark ? "切换到浅色主题" : "切换到深色主题";
     }
 

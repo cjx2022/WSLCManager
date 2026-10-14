@@ -42,10 +42,13 @@
     <SolidColorBrush x:Key="RowAltBrush"      Color="#1B1F25"/>
     <SolidColorBrush x:Key="LogBgBrush"       Color="#191C21"/>
 
-    <!-- ── 文字 ── -->
+    <!-- ── 文字 ──
+         深色的"灰"要比浅色保守得多：浅色里那套灰（#565E6B / #7A8391）是按白底配的，
+         照搬到深底上会发暗、像禁用态。这里整档提亮（bill 反馈"灰字再白一点"），
+         层次仍是 正文 > 次要 > 弱化 > 禁用，实测 13.1 / 9.7 / 6.4 / 3.6 :1。 -->
     <SolidColorBrush x:Key="TextBrush"        Color="#E6E9EF"/>
-    <SolidColorBrush x:Key="SubTextBrush"     Color="#A8B0BD"/>
-    <SolidColorBrush x:Key="MutedBrush"       Color="#7C8695"/>
+    <SolidColorBrush x:Key="SubTextBrush"     Color="#C2C9D2"/>
+    <SolidColorBrush x:Key="MutedBrush"       Color="#9AA4B0"/>
 
     <!-- ── 语义色（全部提亮，否则在深底上发暗、小字不可读） ── -->
     <SolidColorBrush x:Key="OkBrush"          Color="#3DD68C"/>
@@ -53,7 +56,7 @@
     <SolidColorBrush x:Key="ErrBrush"         Color="#FF6B6F"/>
     <SolidColorBrush x:Key="InfoBrush"        Color="#4C8DFF"/>
 
-    <SolidColorBrush x:Key="DisabledFgBrush"  Color="#5C646F"/>
+    <SolidColorBrush x:Key="DisabledFgBrush"  Color="#6E7883"/>
 
     <!-- ── 控件细节色 ── -->
     <SolidColorBrush x:Key="DangerSoftBgBrush"       Color="#3A1F22"/>

@@ -51,6 +51,9 @@
     <!-- 应用内 logo（去底透明 PNG），以 pack URI 方式加载；
          app.ico 也作为资源嵌入，供托盘图标兜底加载 -->
     <Resource Include="Assets\logo.png" />
+    <!-- 深色主题专用的 logo 变体：原图是深海军蓝线条，在深底上几乎看不见。
+         只换线色（亮蓝），alpha/抗锯齿原样保留。 -->
+    <Resource Include="Assets\logo-on-dark.png" />
     <Resource Include="app.ico" />
   </ItemGroup>
 

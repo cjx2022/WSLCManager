@@ -72,18 +72,20 @@
         </Setter>
     </Style>
 
-    <!-- 左下角的主题切换。与导航项同一视觉语言（图标 + 文字、左对齐），
-         但底色更克制 —— 它不是"一个页面"，是一个开关。
-         文字/图标由 MainWindow 在切换时改写（按钮文案 = 点下去会变成什么）。 -->
+    <!-- 左下角的主题切换：**只一个图标**，与右下角的状态提示左右对称。
+         做成圆形图标按钮（28×28），刻意不跟导航项同款 —— 它不是"一个页面"，是个开关。
+         图标与悬停提示由 MainWindow 在切换时改写（显示"点下去会变成什么"，不是当前状态）。 -->
     <Style x:Key="ThemeToggleButton" TargetType="Button">
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-        <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}"/>
+        <Setter Property="Width" Value="28"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="bd" CornerRadius="8" Background="Transparent" Padding="12,8">
-                        <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                    <Border x:Name="bd" CornerRadius="14" Background="Transparent">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -93,6 +95,7 @@
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="bd" Property="Background"
                                     Value="{DynamicResource AccentSoftBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -298,6 +301,10 @@
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <!-- ⚠ 必须显式给 Foreground：模板里的 ContentPresenter 不设前景色，会一路回退到
+             **系统默认的黑色** —— 浅色主题下看不出来，深色主题里就是"深底黑字"
+             （bill 反馈的：新建容器卡片里那几个勾选项）。这里统一治，全应用的复选框都受益。 -->
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
