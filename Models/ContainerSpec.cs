@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,12 +44,41 @@ public sealed class ContainerSpec
             : $"{HostPort}:{ContainerPort}/{Protocol}";
     }
 
-    public sealed class VolumeMap
+    /// <summary>
+    /// 一条目录挂载。
+    /// ⚠ 这个类必须实现 INotifyPropertyChanged：界面上的「选择…」按钮会**由代码**写 HostPath，
+    ///   而绑定是 OneWay 到 UI 的 —— 没有变更通知的话，选完目录输入框还是空的
+    ///   （看起来像"选了没用"，实际是值写进去了、界面不知道）。
+    /// </summary>
+    public sealed class VolumeMap : INotifyPropertyChanged
     {
-        public string HostPath { get; set; } = "";
-        public string ContainerPath { get; set; } = "";
-        public bool ReadOnly { get; set; }
+        private string _hostPath = "";
+        private string _containerPath = "";
+        private bool _readOnly;
+
+        public string HostPath
+        {
+            get => _hostPath;
+            set { if (_hostPath != value) { _hostPath = value ?? ""; Raise(nameof(HostPath)); Raise(nameof(Text)); } }
+        }
+
+        public string ContainerPath
+        {
+            get => _containerPath;
+            set { if (_containerPath != value) { _containerPath = value ?? ""; Raise(nameof(ContainerPath)); Raise(nameof(Text)); } }
+        }
+
+        public bool ReadOnly
+        {
+            get => _readOnly;
+            set { if (_readOnly != value) { _readOnly = value; Raise(nameof(ReadOnly)); Raise(nameof(Text)); } }
+        }
+
         public string Text => ReadOnly ? $"{HostPath}:{ContainerPath}:ro" : $"{HostPath}:{ContainerPath}";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void Raise(string name)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
     public sealed class EnvVar

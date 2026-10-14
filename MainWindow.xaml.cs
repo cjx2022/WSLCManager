@@ -1033,7 +1033,14 @@ public partial class MainWindow : Window
 
             Window dlg = null;
             if (v == "create")
-                dlg = new CreateContainerDialog(_images, _networks.Select(n => n.Name)) { Owner = this };
+            {
+                var cdlg = new CreateContainerDialog(_images, _networks.Select(n => n.Name)) { Owner = this };
+                // --fill-demo 顺带预填一行挂载：验证「代码写 HostPath → 输入框显示」这条绑定链
+                if (Environment.GetCommandLineArgs()
+                        .Any(a => a.Equals("--fill-demo", StringComparison.OrdinalIgnoreCase)))
+                    cdlg.PresetVolume(@"D:\data\app", "/data");
+                dlg = cdlg;
+            }
             else if (v == "detail" && _containers.Count > 0)
                 dlg = new ContainerDetailDialog(_containers[0]) { Owner = this };
             else if (v == "logs" && _containers.Count > 0)

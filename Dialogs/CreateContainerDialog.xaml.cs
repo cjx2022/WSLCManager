@@ -93,6 +93,20 @@ public partial class CreateContainerDialog : Window
         UpdatePreview();
     }
 
+    /// <summary>
+    /// 验收用：模拟「刚从文件夹选择器选完」的状态 —— 赋值路径与 OnPickHostFolder **完全一致**
+    /// （都是写 VolumeMap.HostPath），用来验证「代码写入 → 输入框显示」这条链。
+    /// 系统文件对话框本身点不了（那是 OS 模态窗口），但真正容易出问题的是这条链：
+    /// VolumeMap 少了 INotifyPropertyChanged，选完路径写进去了、界面却还是空的。
+    /// </summary>
+    public void PresetVolume(string hostPath, string containerPath)
+    {
+        if (_volumes.Count == 0) _volumes.Add(new ContainerSpec.VolumeMap());
+        _volumes[0].HostPath = hostPath;
+        _volumes[0].ContainerPath = containerPath;
+        UpdatePreview();
+    }
+
     private void OnTitleDrag(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed) DragMove();
@@ -121,6 +135,40 @@ public partial class CreateContainerDialog : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is ContainerSpec.VolumeMap v) _volumes.Remove(v);
         UpdatePreview();
+    }
+
+    /// <summary>
+    /// 「选择…」：调系统文件夹选择器填宿主路径，省得手打 ——
+    /// 手打 Windows 路径最容易错在盘符与反斜杠上，错了要等容器起不来才发现。
+    /// 用 .NET 8 新增的 <c>OpenFolderDialog</c>（WPF 自带），不引 WinForms 那套。
+    /// </summary>
+    private void OnPickHostFolder(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.DataContext is not ContainerSpec.VolumeMap v) return;
+
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "选择要挂载到容器里的宿主文件夹",
+                Multiselect = false
+            };
+
+            // 已经有合法路径时就从那（或其父级）打开，省得每次从"此电脑"重新点起
+            var current = (v.HostPath ?? "").Trim();
+            if (current.Length > 0 && System.IO.Directory.Exists(current))
+                dlg.InitialDirectory = current;
+
+            if (dlg.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dlg.FolderName))
+            {
+                v.HostPath = dlg.FolderName;   // VolumeMap 实现了 INPC，输入框会跟着更新
+                UpdatePreview();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDialog.Info(this, "打开文件夹选择器失败", ex.Message);
+        }
     }
 
     private void OnAddEnv(object sender, RoutedEventArgs e)

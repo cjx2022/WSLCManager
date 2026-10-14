@@ -171,16 +171,27 @@
                                     <DataTemplate>
                                         <Grid Margin="0,0,0,6">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="220"/>
+                                                <ColumnDefinition Width="262"/>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="180"/>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBox Grid.Column="0" Style="{StaticResource RowBox}"
-                                                     Text="{Binding HostPath, UpdateSourceTrigger=PropertyChanged}"
-                                                     TextChanged="OnAnyChanged"/>
+                                            <!-- 宿主路径支持「选择…」挑文件夹：手打 Windows 路径太容易错 -->
+                                            <Grid Grid.Column="0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox Grid.Column="0" Style="{StaticResource RowBox}"
+                                                         Text="{Binding HostPath, UpdateSourceTrigger=PropertyChanged}"
+                                                         TextChanged="OnAnyChanged"/>
+                                                <Button Grid.Column="1" Style="{StaticResource AddBtn}"
+                                                        Margin="4,0,0,0" Content="选择…"
+                                                        ToolTip="从磁盘里挑一个文件夹，不用手打路径"
+                                                        Click="OnPickHostFolder"/>
+                                            </Grid>
                                             <TextBlock Grid.Column="1" Text=":" Margin="8,0" VerticalAlignment="Center"
                                                        Foreground="{DynamicResource SubTextBrush}"/>
                                             <TextBox Grid.Column="2" Style="{StaticResource RowBox}"
